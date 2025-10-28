@@ -5,6 +5,24 @@ import numpy as np
 from ultralytics import YOLO
 from collections import defaultdict
 import os
+import subprocess
+import sys
+
+# ✅ تأكد من وجود مكتبة OpenCV (نسخة مستقرة ومجربة)
+try:
+    import cv2
+except ImportError:
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "opencv-python-headless==4.8.0.74"]
+    )
+    import cv2
+
+import streamlit as st
+import tempfile
+import numpy as np
+from ultralytics import YOLO
+from collections import defaultdict
+
 
 # --------------------- PAGE SETUP ---------------------
 st.set_page_config(page_title="Football Tracking & Analysis", layout="wide")
