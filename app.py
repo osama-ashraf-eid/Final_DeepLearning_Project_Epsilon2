@@ -1,27 +1,20 @@
-import streamlit as st
-import cv2
-import tempfile
-import numpy as np
-from ultralytics import YOLO
-from collections import defaultdict
 import os
-import subprocess
 import sys
+import subprocess
 
-# ✅ تأكد من وجود مكتبة OpenCV (نسخة مستقرة ومجربة)
+# ✅ تثبيت OpenCV في حال عدم وجوده
 try:
     import cv2
-except ImportError:
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "opencv-python-headless==4.8.0.74"]
-    )
+except Exception:
+    subprocess.run([sys.executable, "-m", "pip", "install", "opencv-python-headless==4.8.0.74"])
     import cv2
 
 import streamlit as st
-import tempfile
 import numpy as np
 from ultralytics import YOLO
 from collections import defaultdict
+import tempfile
+
 
 
 # --------------------- PAGE SETUP ---------------------
