@@ -7,3 +7,4 @@ Pillow
 pandas
 tensorflow
 omegaconf  
+lap>=0.5.12
