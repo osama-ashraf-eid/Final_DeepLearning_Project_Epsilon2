@@ -48,37 +48,68 @@ if uploaded_video is not None:
 
     model = YOLO(model_path)
 
-    # --------------------- VIDEO SETTINGS ---------------------
     cap = cv2.VideoCapture(temp_input.name)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
 
-    # حفظ الفيديو الناتج
     output_path = os.path.join(tempfile.gettempdir(), "processed_football_video.mp4")
     out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
 
     # --------------------- COLORS ---------------------
     color_ball = (0, 255, 255)
-    color_referee = (200, 200, 200)
+    color_referee = (0, 255, 0)
+    color_goalkeeper = (0, 255, 255)
     color_team_a = (0, 0, 255)
     color_team_b = (255, 0, 0)
-    team_colors = {}
+    color_text_black = (0, 0, 0)
 
+    first_team_color = None
+    second_team_color = None
+
+    # --------------------- HELPER FUNCTIONS ---------------------
     def get_average_color(frame, box):
-        x1, y1, x2, y2 = box
+        x1, y1, x2, y2 = [int(i) for i in box]
         roi = frame[y1:y2, x1:x2]
         if roi.size == 0:
             return np.array([0, 0, 0])
         return np.mean(roi.reshape(-1, 3), axis=0)
 
-    def assign_team(player_id, avg_color):
-        if player_id not in team_colors:
-            if np.mean(avg_color) < 128:
-                team_colors[player_id] = "A"
+    def classify_team(avg_color):
+        global first_team_color, second_team_color
+        if first_team_color is None:
+            first_team_color = avg_color
+            return "A"
+        if second_team_color is None:
+            dist = np.linalg.norm(avg_color - first_team_color)
+            if dist > 40:
+                second_team_color = avg_color
+                return "B"
             else:
-                team_colors[player_id] = "B"
-        return team_colors[player_id]
+                return "A"
+        distA = np.linalg.norm(avg_color - first_team_color)
+        distB = np.linalg.norm(avg_color - second_team_color)
+        return "A" if distA < distB else "B"
+
+    def is_referee(avg_color):
+        # الحكم عادة أسود أو أصفر
+        return (np.mean(avg_color) < 60) or (avg_color[1] > 150 and avg_color[0] < 80)
+
+    def is_goalkeeper(y1, y2, frame_height):
+        # الحارس قريب من المرمى (أعلى أو أسفل الشاشة)
+        return y2 < frame_height * 0.25 or y1 > frame_height * 0.75
+
+    def find_player_with_ball(ball_box, player_boxes):
+        bx1, by1, bx2, by2 = [int(i) for i in ball_box]
+        ball_center = np.array([(bx1 + bx2) / 2, (by1 + by2) / 2])
+        min_dist = float('inf')
+        nearest_id = None
+        for pid, (x1, y1, x2, y2) in player_boxes.items():
+            player_center = np.array([(x1 + x2) / 2, (y1 + y2) / 2])
+            dist = np.linalg.norm(ball_center - player_center)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_id = pid
+        return nearest_id
 
     # --------------------- PROCESSING ---------------------
     st.info("🚀 Processing video... please wait.")
@@ -99,7 +130,6 @@ if uploaded_video is not None:
         frame = frame_data.orig_img.copy()
         frame_num += 1
         progress.progress(frame_num / total_frames)
-
         if frame_data.boxes.id is None:
             out.write(frame)
             continue
@@ -108,38 +138,54 @@ if uploaded_video is not None:
         classes = frame_data.boxes.cls.cpu().numpy().astype(int)
         ids = frame_data.boxes.id.cpu().numpy().astype(int)
 
+        player_boxes = {}
+        ball_box = None
+
         for box, cls, track_id in zip(boxes, classes, ids):
             x1, y1, x2, y2 = map(int, box)
+            avg_color = get_average_color(frame, (x1, y1, x2, y2))
 
             # Ball
             if cls == 0:
+                ball_box = (x1, y1, x2, y2)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color_ball, 3)
-                cv2.putText(frame, "Ball", (x1, y1 - 10), cv2.FONT_HERSHEY_DUPLEX, 0.8, color_ball, 2)
+                cv2.putText(frame, "Ball", (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.8, color_ball, 2)
 
-            # Player
-            elif cls in [1, 2]:
-                avg_color = get_average_color(frame, (x1, y1, x2, y2))
-                team = assign_team(track_id, avg_color)
-                color = color_team_a if team == "A" else color_team_b
+            # Player or Referee or Goalkeeper
+            elif cls in [1, 2, 3]:
+                if is_referee(avg_color):
+                    role = "Referee"
+                    color = color_referee
+                elif is_goalkeeper(y1, y2, h):
+                    role = "Goalkeeper"
+                    color = color_goalkeeper
+                else:
+                    team = classify_team(avg_color)
+                    role = f"Team {team}"
+                    color = color_team_a if team == "A" else color_team_b
+                    player_boxes[track_id] = (x1, y1, x2, y2)
+
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, f"Team {team} #{track_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_DUPLEX, 0.7, color, 2)
+                cv2.putText(frame, f"{role} #{track_id}", (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.7, color, 2)
 
-            # Referee
-            elif cls == 3:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color_referee, 2)
-                cv2.putText(frame, "Referee", (x1, y1 - 10), cv2.FONT_HERSHEY_DUPLEX, 0.6, color_referee, 2)
+        # تحديد اللاعب اللي معاه الكورة
+        if ball_box and len(player_boxes) > 0:
+            player_with_ball_id = find_player_with_ball(ball_box, player_boxes)
+            if player_with_ball_id in player_boxes:
+                x1, y1, x2, y2 = player_boxes[player_with_ball_id]
+                cv2.putText(frame, "has a ball", (x1, y1 - 35),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.8, color_text_black, 2)
 
         out.write(frame)
 
     cap.release()
     out.release()
-
     st.success("✅ Tracking Complete!")
 
     # --------------------- DISPLAY OUTPUT ---------------------
     st.markdown("<h3 style='text-align:center;'>🎥 Processed Video</h3>", unsafe_allow_html=True)
-
-    # عرض الفيديو في Streamlit
     with open(output_path, "rb") as video_file:
         video_bytes = video_file.read()
         st.video(video_bytes)
