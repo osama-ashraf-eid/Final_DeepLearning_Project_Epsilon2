@@ -110,11 +110,12 @@ def process_video(video_path, model):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # Use tempfile for the output video
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_out_file:
+    # FINAL ATTEMPT: Use .avi extension with XVID codec for maximum compatibility
+    with tempfile.NamedTemporaryFile(suffix=".avi", delete=False) as tmp_out_file: 
         output_path = tmp_out_file.name
 
-    # IMPORTANT: Use 'mp4v' for cross-browser compatibility.
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
+    # CRITICAL CHANGE: Using 'XVID' codec for better compatibility in Linux/Streamlit environment
+    fourcc = cv2.VideoWriter_fourcc(*'XVID') 
     out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
 
     # Progress bar and status setup
@@ -286,7 +287,8 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
     # Save the uploaded file temporarily
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
+    # NOTE: The suffix here is .mp4 for the uploaded file, which is fine.
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file: 
         tmp_file.write(uploaded_file.read())
         video_file_path = tmp_file.name
 
@@ -309,7 +311,7 @@ if uploaded_file is not None:
             
             # --- Display Video Result ---
             st.subheader("Analyzed Video Result")
-            # The video should now appear as the temporary file is NOT being unlinked immediately.
+            # Streamlit is usually smart enough to play AVI/XVID, but if not, this will fail.
             st.video(output_path) 
             
             status_placeholder.empty()
