@@ -311,10 +311,22 @@ if uploaded_file is not None:
             
             # --- Display Video Result ---
             st.subheader("Analyzed Video Result")
-            # Streamlit is usually smart enough to play AVI/XVID, but if not, this will fail.
             st.video(output_path) 
             
             status_placeholder.empty()
+
+            # --- ADD DOWNLOAD BUTTON HERE ---
+            try:
+                with open(output_path, "rb") as file:
+                    st.download_button(
+                        label="⬇️ Download Analyzed Video (.avi)",
+                        data=file,
+                        file_name="analyzed_football_video.avi",
+                        mime="video/avi",
+                        use_container_width=True,
+                    )
+            except Exception as e:
+                st.error(f"Could not prepare download link: {e}")
 
             # --- REMOVED ANALYSIS SUMMARY SECTION HERE AS REQUESTED ---
             
