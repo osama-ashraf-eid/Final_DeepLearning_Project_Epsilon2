@@ -291,12 +291,26 @@ def process_video_tracking(input_video_path, model, output_video_path, status_pl
 # ----------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Football Detection & Tracking an& Analysis",
+    page_title="Football Tracking and Analysis - Ultralytics YOLOv8",
     layout="wide"
 )
 
-st.title("⚽ Ball Possession and Tracking Analyzer (YOLOv8 & Streamlit)")
+# --- Title and Image Section ---
+st.markdown("<h1 style='text-align: center; color: #1F77B4;'>⚽ Ball Possession and Tracking Analyzer (YOLOv8 & Streamlit)</h1>", unsafe_allow_html=True)
+
+# Image insertion as requested
+IMAGE_PATH = "football_image.jpg"
+if os.path.exists(IMAGE_PATH):
+    # Use columns to center the image
+    col_img1, col_img2, col_img3 = st.columns([1, 2, 1])
+    with col_img2:
+        st.image(IMAGE_PATH, use_column_width=True)
+else:
+    st.warning(f"Image file '{IMAGE_PATH}' not found. Please ensure it is in the same directory.")
+
 st.markdown("Please upload a football match video file to start the tracking process and get possession and passing statistics.")
+# -------------------------------
+
 
 # Warning about the model
 st.warning(f"""
