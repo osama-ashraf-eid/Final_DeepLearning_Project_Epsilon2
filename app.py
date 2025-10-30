@@ -18,6 +18,7 @@ except ImportError:
 MODEL_PATH = "yolov8m-football_ball_only.pt"
 TRACKER_CONFIG = "botsort.yaml"
 
+
 # ----------------------------------------------------------------------
 # Helper Functions
 # ----------------------------------------------------------------------
@@ -207,13 +208,11 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Stylish Header and Image ---
+# --- Header + Image (Full Width Hero Section) ---
 st.markdown(
     """
     <div style='text-align:center;'>
-        <h1 style='color:#1F77B4; font-size:45px;'>
-            ⚽ Football Detection & Tracking
-        </h1>
+        <h1 style='color:#1F77B4; font-size:45px;'>⚽ Football Detection & Tracking</h1>
     </div>
     """,
     unsafe_allow_html=True
@@ -226,20 +225,20 @@ if os.path.exists(IMAGE_PATH):
         <div style="
             position: relative;
             width: 100%;
-            border-radius: 15px;
+            border-radius: 20px;
             overflow: hidden;
-            box-shadow: 0 8px 20px rgba(0,0,0,0.5);
-            margin-bottom: 30px;">
-            <img src="{IMAGE_PATH}" style="width:100%; filter:brightness(0.7);">
+            box-shadow: 0 10px 25px rgba(0,0,0,0.6);
+            margin-bottom: 40px;">
+            <img src="{IMAGE_PATH}" style="width:100%; filter: brightness(0.65);">
             <div style="
                 position: absolute;
                 top: 50%;
                 left: 50%;
                 transform: translate(-50%, -50%);
                 color: white;
-                font-size: 40px;
+                font-size: 38px;
                 font-weight: bold;
-                text-shadow: 2px 2px 10px #000;">
+                text-shadow: 3px 3px 15px #000;">
                 ⚡ AI-Powered Match Analysis
             </div>
         </div>
@@ -255,7 +254,7 @@ You'll get detailed insights about **ball possession, team passes, and overall c
 """)
 
 # ----------------------------------------------------------------------
-# Rest of the app (upload, process, and analysis)
+# Rest of the app
 # ----------------------------------------------------------------------
 
 st.warning(f"""
