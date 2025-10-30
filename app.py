@@ -299,7 +299,7 @@ st.set_page_config(
 st.markdown("<h1 style='text-align: center; color: #1F77B4;'>⚽ Ball Possession and Tracking Analyzer (YOLOv8 & Streamlit)</h1>", unsafe_allow_html=True)
 
 # Image insertion as requested
-IMAGE_PATH = "football_image.jpg"
+IMAGE_PATH = "football_img.jpg"
 if os.path.exists(IMAGE_PATH):
     # Use columns to center the image
     col_img1, col_img2, col_img3 = st.columns([1, 2, 1])
