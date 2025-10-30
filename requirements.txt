@@ -6,3 +6,4 @@ torch
 Pillow
 pandas
 tensorflow
+omegaconf  <-- ADD THIS LINE
