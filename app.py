@@ -295,6 +295,8 @@ st.markdown("---")
 # الصورة الكبيرة المطلوبة
 # بما أننا لا نستطيع تحميل ملف محلي (football_image.jpg)، سنستخدم رابط صورة عامة كبيرة كبديل.
 st.image("https://placehold.co/1200x400/10B981/FFFFFF?text=football_image.jpg+Placeholder", use_column_width=True)
+st.image("football_img.jpg", use_column_width=True)
+
 st.markdown("---")
 
 # تحميل الفيديو
