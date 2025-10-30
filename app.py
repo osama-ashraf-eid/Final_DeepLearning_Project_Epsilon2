@@ -314,35 +314,7 @@ if uploaded_file is not None:
             
             status_placeholder.empty()
 
-            st.markdown("## Analysis Summary")
-            
-            # Split layout for team statistics
-            col1, col2 = st.columns([1, 1])
-            
-            # Display Team Possession Stats
-            with col1:
-                st.subheader("Team Possession (Frames Count)")
-                team_data = {
-                    "Team": list(stats['team_possession'].keys()),
-                    "Possession Frames": list(stats['team_possession'].values())
-                }
-                st.dataframe(team_data, use_container_width=True, hide_index=True)
-                
-            # Display Passes Stats
-            with col2:
-                total_passes = stats['total_passes']
-                st.metric("Total Passes Detected", total_passes)
-
-                st.subheader("Passes per Team (Gained Possession)")
-                team_pass_data = {
-                    "Team": list(stats['team_passes_counter'].keys()),
-                    "Passes": list(stats['team_passes_counter'].values())
-                }
-                st.dataframe(team_pass_data, use_container_width=True, hide_index=True)
-
-
-            # --- Removed Player Possession and Pass List tables as requested ---
-            
+            # --- REMOVED ANALYSIS SUMMARY SECTION HERE AS REQUESTED ---
             
         # Clean up the original uploaded file (output file cleanup is tricky in Streamlit, 
         # so we leave the output_path management as simple as possible)
