@@ -3,11 +3,14 @@ import cv2
 import numpy as np
 import tempfile
 import os
+from collections import defaultdict
 
+# --- Model Loading and Initialization ---
 try:
     from ultralytics import YOLO
-    from collections import defaultdict
+    
     MODEL_PATH = "yolov8m-football_ball_only.pt"
+    
     @st.cache_resource
     def load_model():
         try:
@@ -100,7 +103,7 @@ def process_video(video_path, model):
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_out_file:
         output_path = tmp_out_file.name
 
-    # Use 'avc1' for compatibility with Streamlit/browsers
+    # Use 'mp4v' for compatibility with Streamlit/browsers
     fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
     out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
 
@@ -113,8 +116,6 @@ def process_video(video_path, model):
     
     # --- Tracking Loop ---
     
-    # Using 'stream=True' is good for efficiency, but Streamlit requires a clear loop
-    # We will use the model.track method which returns a generator
     try:
         results_generator = model.track(
             source=video_path,
@@ -279,9 +280,11 @@ def process_video(video_path, model):
 # 4. Streamlit UI Layout
 st.set_page_config(layout="wide", page_title="Football Tracking & Analysis")
 
-
-st.title("Football detection & tracking")
+# Centered Title (using HTML for centering)
+st.markdown("<h1 style='text-align: center; color: #1f77b4;'>⚽ Football Detection & Tracking 📊</h1>", unsafe_allow_html=True)
 st.markdown("---")
+
+# Image (use_column_width=True already maximizes the size within the column)
 st.image("football_img.jpg", use_column_width=True)
 
 st.markdown("---")
