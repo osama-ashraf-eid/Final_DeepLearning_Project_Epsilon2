@@ -91,7 +91,7 @@ def process_video(video_path, model):
     if model is None:
         return None, {}
 
-    # Initialize stats counters
+    # Initialize stats counters (MATCHING USER'S DETAILED LOGIC)
     last_owner_id = None
     possession_counter = defaultdict(int)
     passes = []
@@ -176,7 +176,8 @@ def process_video(video_path, model):
                         
                     players.append((track_id, (x1, y1, x2, y2), team_name))
                     cv2.rectangle(frame, (x1, y1), (x2, y2), draw_color, 2)
-                    cv2.putText(frame, f"{team_name} ID:{track_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_DUPLEX, 0.7, draw_color, 2)
+                    # MATCHING USER'S LOGIC: Draw team and ID
+                    cv2.putText(frame, f"{team_name} #{track_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_DUPLEX, 0.7, draw_color, 2)
 
                 else:
                     # Referee
@@ -199,8 +200,8 @@ def process_video(video_path, model):
                         current_owner_id = player_id
                         current_owner_team = team_name
 
-                # Increased threshold for better possession detection (e.g., 150)
-                POSSESSION_THRESHOLD = 150 
+                # MATCHING USER'S LOGIC: Possession threshold is 90
+                POSSESSION_THRESHOLD = 90 
                 if min_dist < POSSESSION_THRESHOLD:
                     possession_counter[current_owner_id] += 1
                     team_possession_counter[current_owner_team] += 1
@@ -221,25 +222,29 @@ def process_video(video_path, model):
                     if player_id == current_owner_id:
                         px1, py1, px2, py2 = box
                         cv2.rectangle(frame, (px1, py1), (px2, py2), color_possession, 4)
-                        cv2.putText(frame, f" {team_name} ID:{player_id} HAS THE BALL",
+                        # MATCHING USER'S LOGIC: Draw possession text
+                        cv2.putText(frame, f" {team_name} #{player_id} HAS THE BALL",
                                     (px1, py1 - 15), cv2.FONT_HERSHEY_COMPLEX, 0.8, color_possession, 3)
 
-            # Draw Stats Overlay on the frame (Keeping simple stats for the UI)
+            # Draw Stats Overlay on the frame (MATCHING USER'S DETAILED LOGIC)
             start_y = 30
             
-            # Team Possession
-            cv2.putText(frame, "--- TEAM POSSESSION ---", (10, start_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            start_y += 25
-            
-            for team_name, count in team_possession_counter.items():
-                cv2.putText(frame, f"{team_name} Frames: {count}",
-                            (10, start_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                start_y += 25
-            
-            # Total Passes
-            cv2.putText(frame, f"Total Passes: {len(passes)}", (10, start_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            start_y += 30
+            # Player Possession Stats
+            for idx, (player_id, count) in enumerate(possession_counter.items()):
+                cv2.putText(frame, f"Player {player_id} Possession: {count} frames",
+                            (10, start_y + idx*25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,200,255), 2)
 
+            offset = start_y + len(possession_counter)*25 + 10
+            
+            # Team Possession Stats
+            for team_name, count in team_possession_counter.items():
+                cv2.putText(frame, f"{team_name} Possession: {count} frames",
+                            (10, offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+                offset += 25
+                
+            # Total Passes
+            cv2.putText(frame, f"Total Passes: {len(passes)}", (10, offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
+            
             out.write(frame)
             
             # Update progress
