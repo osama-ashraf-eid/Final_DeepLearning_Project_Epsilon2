@@ -3,16 +3,11 @@ import cv2
 import numpy as np
 import tempfile
 import os
-# يجب التأكد من تثبيت هذه المكتبات (pip install ultralytics opencv-python-headless numpy streamlit)
 
-# 1. تهيئة النموذج والمكتبات
 try:
     from ultralytics import YOLO
     from collections import defaultdict
-    
-    # يمكنك استبدال هذا المسار بمسار النموذج الخاص بك في بيئة النشر الفعلية
     MODEL_PATH = "yolov8m-football_ball_only.pt"
-    # يتم تحميل النموذج مرة واحدة
     @st.cache_resource
     def load_model():
         try:
@@ -31,14 +26,12 @@ except Exception as e:
     st.error(f"An error occurred during model initialization: {e}")
     model = None
 
-# 2. البيانات الثابتة للألوان والأسماء
 names = {0: 'ball', 1: 'goalkeeper', 2: 'player', 3: 'referee'}
 color_ball = (0, 255, 255)
 color_referee = (200, 200, 200)
 color_possession = (0, 255, 0)
 
-# 3. دوال تحليل الألوان وتحديد الفرق
-# يتم نقل الدوال المساعدة كما هي تقريباً
+
 def get_average_color(frame, box):
     """Calculates the average BGR color of a bounding box ROI."""
     x1, y1, x2, y2 = box
@@ -50,12 +43,10 @@ def get_average_color(frame, box):
 team_colors = {}
 team_possession_counter = defaultdict(int)
 
-# يجب إعادة تعريف الدالة assign_team داخل الدالة الرئيسية أو استخدام الديكور @st.cache_data
-# لتجنب إعادة تعيين المتغيرات العالمية في كل تفاعل Streamlit.
-# بما أننا سنعيد تشغيل المنطق كاملاً عند التحميل، يمكننا تبسيطها.
+
 def assign_team(player_id, color, team_colors_map):
     """Assigns a player to a team based on jersey color clustering."""
-    # Logic is simplified for demonstration in a stateless environment
+    
     if player_id not in team_colors_map:
         if len(team_colors_map) == 0:
             team_colors_map[player_id] = color
@@ -288,18 +279,12 @@ def process_video(video_path, model):
 # 4. Streamlit UI Layout
 st.set_page_config(layout="wide", page_title="Football Tracking & Analysis")
 
-# العنوان المطلوب
+
 st.title("Football detection & tracking")
 st.markdown("---")
-
-# الصورة الكبيرة المطلوبة
-# بما أننا لا نستطيع تحميل ملف محلي (football_image.jpg)، سنستخدم رابط صورة عامة كبيرة كبديل.
-
 st.image("football_img.jpg", use_column_width=True)
 
 st.markdown("---")
-
-# تحميل الفيديو
 uploaded_file = st.file_uploader(
     "Upload a football video (MP4 or MOV)", 
     type=["mp4", "mov", "avi"]
