@@ -6,5 +6,5 @@ torch
 Pillow
 pandas
 tensorflow
-omegaconf  
+omegaconf
 lap>=0.5.12
