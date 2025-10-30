@@ -285,8 +285,7 @@ st.markdown("<h1 style='text-align: center; color: #1f77b4;'>⚽ Football Detect
 st.markdown("---")
 
 # Image (use_column_width=True already maximizes the size within the column)
-st.image("football_img.jpg", use_column_width=True)
-
+st.image("football_img.jpg", use_container_width=True)
 st.markdown("---")
 uploaded_file = st.file_uploader(
     "Upload a football video (MP4 or MOV)", 
