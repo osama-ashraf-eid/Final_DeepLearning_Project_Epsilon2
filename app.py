@@ -18,26 +18,7 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-st.set_page_config(layout="wide")
-
-st.markdown(
-    """
-    <style>
-        .full-page-image {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            object-fit: cover;
-            z-index: -1;
-        }
-    </style>
-
-    <img src="football_img.jpg" class="full-page-image">
-    """,
-    unsafe_allow_html=True
-)
+st.image("football_img.jpg", use_container_width=True)
 
 
 # --------------------- VIDEO UPLOAD ---------------------
