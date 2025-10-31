@@ -44,19 +44,16 @@ if uploaded_video is not None:
     temp_input.write(uploaded_video.read())
 
     # --------------------- MODEL ---------------------
-    model_path = "yolov8m-football_ball_only.pt"
+        # --------------------- MODEL ---------------------
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(current_dir, "yolov8m-football_ball_only.pt")
+
     if not os.path.exists(model_path):
-        st.error("⚠️ Model file not found! Please upload 'yolov8m-football_ball_only.pt' in the same folder.")
+        st.error(f"⚠️ Model file not found! Expected here: {model_path}")
         st.stop()
 
     model = YOLO(model_path)
 
-    cap = cv2.VideoCapture(temp_input.name)
-    w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-
-    output_path = os.path.join(tempfile.gettempdir(), "processed_football_video.mp4")
-    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
 
     # --------------------- COLORS ---------------------
     color_ball = (0, 255, 255)
