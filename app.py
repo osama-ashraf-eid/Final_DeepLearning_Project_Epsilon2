@@ -54,15 +54,20 @@ if uploaded_file is not None:
     model = YOLO(model_path)
 
     # --------------------- PROCESS VIDEO ---------------------
+    output_dir = "outputs"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = None
+
     try:
         for percent in range(0, 50, 10):
             time.sleep(0.2)
             progress.progress(percent)
 
+        # Run YOLO tracking
         results = model.track(
             source=video_path,
             save=True,
-            project=tempfile.gettempdir(),
+            project=output_dir,
             name="football_tracking",
             tracker="bytetrack.yaml",
             show=False
@@ -72,41 +77,66 @@ if uploaded_file is not None:
             time.sleep(0.2)
             progress.progress(percent)
 
+        # Try to find saved video
+        output_subdir = os.path.join(output_dir, "football_tracking")
+        if os.path.exists(output_subdir):
+            for root, _, files in os.walk(output_subdir):
+                for f in files:
+                    if f.endswith(".mp4"):
+                        output_path = os.path.join(root, f)
+                        break
+
     except Exception as e:
         st.error(f"❌ Error during tracking: {e}")
         st.stop()
 
-    # --------------------- FIND OUTPUT FILE SAFELY ---------------------
-    output_dir = os.path.join(tempfile.gettempdir(), "football_tracking")
-    output_path = None
-
-    if os.path.exists(output_dir):
-        for root, _, files in os.walk(output_dir):
-            for f in files:
-                if f.endswith(".mp4"):
-                    output_path = os.path.join(root, f)
-                    break
-    else:
-        st.error("❌ Output directory not found.")
-        st.stop()
-
+    # --------------------- FALLBACK: Manual Save ---------------------
     if output_path is None or not os.path.exists(output_path):
-        st.error("❌ No output video was generated. Please check if detections were made.")
-        st.stop()
+        st.warning("⚠️ YOLO did not save output automatically — generating video manually.")
+        try:
+            results = model.track(source=video_path, tracker="bytetrack.yaml", show=False, save=False)
 
-    # --------------------- SUCCESS MESSAGE ---------------------
-    st.success("✅ Tracking Complete!")
+            manual_path = os.path.join(output_dir, "manual_tracking_output.mp4")
+            cap = cv2.VideoCapture(video_path)
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            out = cv2.VideoWriter(manual_path, fourcc, fps, (width, height))
 
-    # --------------------- DISPLAY OUTPUT ---------------------
-    st.markdown("<h3 style='text-align:center;'>🎥 Processed Video</h3>", unsafe_allow_html=True)
-    with open(output_path, "rb") as video_file:
-        video_bytes = video_file.read()
-        st.video(video_bytes)
+            frame_idx = 0
+            for result in results:
+                if result is not None:
+                    frame = result.plot()
+                    out.write(frame)
+                    frame_idx += 1
 
-    # --------------------- DOWNLOAD BUTTON ---------------------
-    b64 = base64.b64encode(video_bytes).decode()
-    href = f'<a href="data:video/mp4;base64,{b64}" download="processed_football_video.mp4">⬇️ Download Processed Video</a>'
-    st.markdown(href, unsafe_allow_html=True)
+            cap.release()
+            out.release()
+            output_path = manual_path
+
+            st.success(f"✅ Manual video saved successfully ({frame_idx} frames).")
+
+        except Exception as e:
+            st.error(f"❌ Manual saving failed: {e}")
+            st.stop()
+
+    # --------------------- DISPLAY RESULT ---------------------
+    if output_path and os.path.exists(output_path):
+        st.success("✅ Tracking Complete!")
+
+        st.markdown("<h3 style='text-align:center;'>🎥 Processed Video</h3>", unsafe_allow_html=True)
+        with open(output_path, "rb") as video_file:
+            video_bytes = video_file.read()
+            st.video(video_bytes)
+
+        # --------------------- DOWNLOAD BUTTON ---------------------
+        b64 = base64.b64encode(video_bytes).decode()
+        href = f'<a href="data:video/mp4;base64,{b64}" download="processed_football_video.mp4">⬇️ Download Processed Video</a>'
+        st.markdown(href, unsafe_allow_html=True)
+
+    else:
+        st.error("❌ No output video could be generated even after manual fallback.")
 
 else:
     st.info("📥 Please upload a football match video to start tracking.")
