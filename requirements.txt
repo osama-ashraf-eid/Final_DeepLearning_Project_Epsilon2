@@ -3,6 +3,7 @@ ultralytics
 opencv-python-headless
 numpy
 torch
+torchvision
 Pillow
 pandas
 tensorflow
