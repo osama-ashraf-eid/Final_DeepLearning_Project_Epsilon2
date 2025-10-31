@@ -73,41 +73,79 @@ if uploaded_video is not None:
     # --------------------- CUSTOM BoT-SORT CONFIG ---------------------
     botsort_path = os.path.join(tempfile.gettempdir(), "custom_botsort.yaml")
     with open(botsort_path, "w") as f:
-    f.write("""
-        tracker_type: botsort
-        track_high_thresh: 0.6
-        track_low_thresh: 0.2
-        new_track_thresh: 0.7
-        track_buffer: 120
-        match_thresh: 0.9
-        gmc_method: sparseOptFlow
-        
-        # Extra required keys for new ultralytics versions
-        with_reid: False
-        model: "osnet_x0_25"
-        proximity_thresh: 0.5
-        appearance_thresh: 0.25
+        f.write("""
+tracker_type: botsort
+track_high_thresh: 0.6
+track_low_thresh: 0.2
+new_track_thresh: 0.7
+track_buffer: 120
+match_thresh: 0.9
+gmc_method: sparseOptFlow
+
+# Extra required keys for new ultralytics versions
+with_reid: False
+model: "osnet_x0_25"
+proximity_thresh: 0.5
+appearance_thresh: 0.25
         """)
 
     # --------------------- HELPER FUNCTIONS ---------------------
+    def get_safe_box_coords(x1, y1, x2, y2, frame_shape):
+        H, W = frame_shape[:2]
+        x1c = int(np.clip(x1, 0, W - 1))
+        x2c = int(np.clip(x2, 0, W - 1))
+        y1c = int(np.clip(y1, 0, H - 1))
+        y2c = int(np.clip(y2, 0, H - 1))
+        if x2c <= x1c or y2c <= y1c:
+            return None
+        return x1c, y1c, x2c, y2c
+
     def get_dominant_color(frame, box, k=2):
-        x1, y1, x2, y2 = [int(i) for i in box]
-        roi = frame[y1:y2, x1:x2]
+        coords = get_safe_box_coords(*box, frame.shape)
+        if coords is None:
+            return np.array([0, 0, 0], dtype=float)
+        x1, y1, x2, y2 = coords
+        roi = frame[y1:y2, x1:x2].copy()
         if roi.size == 0:
-            return np.array([0, 0, 0])
+            return np.array([0, 0, 0], dtype=float)
         # نختار منتصف الجسم فقط لتجنب العشب
-        h_roi, w_roi, _ = roi.shape
-        roi = roi[h_roi//3: h_roi*2//3, w_roi//4: w_roi*3//4]
-        roi = roi.reshape((-1, 3))
-        roi = np.float32(roi)
-        _, labels, centers = cv2.kmeans(roi, k, None,
-                                        (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0),
-                                        10, cv2.KMEANS_RANDOM_CENTERS)
+        h_roi, w_roi = roi.shape[:2]
+        if h_roi < 4 or w_roi < 4:
+            # لو صغير جدا، استخدم كل الـ roi
+            small_roi = roi.reshape((-1, 3))
+            small_roi = np.float32(small_roi)
+            if small_roi.size == 0:
+                return np.array([0, 0, 0], dtype=float)
+            _, labels, centers = cv2.kmeans(small_roi, k, None,
+                                            (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0),
+                                            5, cv2.KMEANS_RANDOM_CENTERS)
+            counts = np.bincount(labels.flatten())
+            dominant = centers[np.argmax(counts)]
+            return dominant
+        # crop center area
+        y1c = h_roi // 3
+        y2c = h_roi * 2 // 3
+        x1c = w_roi // 4
+        x2c = w_roi * 3 // 4
+        roi_center = roi[y1c:y2c, x1c:x2c]
+        if roi_center.size == 0:
+            return np.array([0, 0, 0], dtype=float)
+        roi_pixels = roi_center.reshape((-1, 3))
+        roi_pixels = np.float32(roi_pixels)
+        # run k-means
+        try:
+            _, labels, centers = cv2.kmeans(roi_pixels, k, None,
+                                            (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0),
+                                            10, cv2.KMEANS_RANDOM_CENTERS)
+        except cv2.error:
+            # fallback to mean color if kmeans fails
+            return np.mean(roi_pixels, axis=0)
         counts = np.bincount(labels.flatten())
         dominant = centers[np.argmax(counts)]
         return dominant
 
     def classify_team(avg_color):
+        nonlocal_first = None  # placeholder to avoid closure warnings
         global first_team_color, second_team_color
         if first_team_color is None:
             first_team_color = avg_color
@@ -142,7 +180,7 @@ if uploaded_video is not None:
     # --------------------- PROCESSING ---------------------
     st.info("🚀 Processing video... please wait.")
     progress = st.progress(0)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.get(cv2.CAP_PROP_FRAME_COUNT) > 0 else 1
     frame_num = 0
 
     results = model.track(
@@ -158,10 +196,12 @@ if uploaded_video is not None:
         frame = frame_data.orig_img.copy()
         frame_num += 1
         progress.progress(frame_num / total_frames)
-        if frame_data.boxes.id is None:
+        # some versions return boxes with no ids; guard against that
+        if getattr(frame_data, "boxes", None) is None or getattr(frame_data.boxes, "id", None) is None:
             out.write(frame)
             continue
 
+        # boxes as numpy arrays
         boxes = frame_data.boxes.xyxy.cpu().numpy()
         classes = frame_data.boxes.cls.cpu().numpy().astype(int)
         ids = frame_data.boxes.id.cpu().numpy().astype(int)
