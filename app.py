@@ -3,8 +3,8 @@ import cv2
 import tempfile
 import base64
 import os
+import time
 from ultralytics import YOLO
-import torch
 
 # --------------------- PAGE SETUP ---------------------
 st.set_page_config(page_title="Football Detection & Tracking", layout="wide")
@@ -43,34 +43,56 @@ if uploaded_file is not None:
         video_path = tmp_file.name
 
     st.info("⚙️ Processing video... Please wait.")
+    progress = st.progress(0)
 
     # --------------------- LOAD MODEL ---------------------
     model_path = "yolov8m-football_ball_only.pt"
     if not os.path.exists(model_path):
-        st.error("❌ Model file not found. Please ensure yolov8m-football_ball_only.pt is in the same directory.")
+        st.error("❌ Model file not found. Please ensure 'yolov8m-football_ball_only.pt' is in the same directory.")
         st.stop()
 
     model = YOLO(model_path)
 
-    # --------------------- OUTPUT PATH ---------------------
-    output_path = os.path.join(tempfile.gettempdir(), "processed_output.mp4")
-
     # --------------------- PROCESS VIDEO ---------------------
-    results = model.track(
-        source=video_path,
-        save=True,
-        project=tempfile.gettempdir(),
-        name="football_tracking",
-        tracker="bytetrack.yaml",
-        show=False
-    )
+    try:
+        for percent in range(0, 50, 10):
+            time.sleep(0.2)
+            progress.progress(percent)
 
-    # Find saved output file
+        results = model.track(
+            source=video_path,
+            save=True,
+            project=tempfile.gettempdir(),
+            name="football_tracking",
+            tracker="bytetrack.yaml",
+            show=False
+        )
+
+        for percent in range(50, 101, 10):
+            time.sleep(0.2)
+            progress.progress(percent)
+
+    except Exception as e:
+        st.error(f"❌ Error during tracking: {e}")
+        st.stop()
+
+    # --------------------- FIND OUTPUT FILE SAFELY ---------------------
     output_dir = os.path.join(tempfile.gettempdir(), "football_tracking")
-    for file in os.listdir(output_dir):
-        if file.endswith(".mp4"):
-            output_path = os.path.join(output_dir, file)
-            break
+    output_path = None
+
+    if os.path.exists(output_dir):
+        for root, _, files in os.walk(output_dir):
+            for f in files:
+                if f.endswith(".mp4"):
+                    output_path = os.path.join(root, f)
+                    break
+    else:
+        st.error("❌ Output directory not found.")
+        st.stop()
+
+    if output_path is None or not os.path.exists(output_path):
+        st.error("❌ No output video was generated. Please check if detections were made.")
+        st.stop()
 
     # --------------------- SUCCESS MESSAGE ---------------------
     st.success("✅ Tracking Complete!")
