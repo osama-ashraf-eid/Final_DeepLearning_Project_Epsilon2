@@ -74,20 +74,20 @@ if uploaded_video is not None:
     botsort_path = os.path.join(tempfile.gettempdir(), "custom_botsort.yaml")
     with open(botsort_path, "w") as f:
     f.write("""
-tracker_type: botsort
-track_high_thresh: 0.6
-track_low_thresh: 0.2
-new_track_thresh: 0.7
-track_buffer: 120
-match_thresh: 0.9
-gmc_method: sparseOptFlow
-
-# Extra required keys for new ultralytics versions
-with_reid: False
-model: "osnet_x0_25"
-proximity_thresh: 0.5
-appearance_thresh: 0.25
-        """)
+    tracker_type: botsort
+    track_high_thresh: 0.6
+    track_low_thresh: 0.2
+    new_track_thresh: 0.7
+    track_buffer: 120
+    match_thresh: 0.9
+    gmc_method: sparseOptFlow
+    
+    # Extra required keys for new ultralytics versions
+    with_reid: False
+    model: "osnet_x0_25"
+    proximity_thresh: 0.5
+    appearance_thresh: 0.25
+            """)
 
     # --------------------- HELPER FUNCTIONS ---------------------
     def get_dominant_color(frame, box, k=2):
