@@ -66,33 +66,13 @@ if uploaded_video is not None:
     first_team_color = None
     second_team_color = None
 
-    # --------------------- CREATE CUSTOM BoT-SORT CONFIG ---------------------
-    botsort_path = os.path.join(tempfile.gettempdir(), "custom_botsort.yaml")
-    with open(botsort_path, "w") as f:
-        f.write("""
-tracker_type: botsort
-track_high_thresh: 0.5
-track_low_thresh: 0.1
-new_track_thresh: 0.7
-track_buffer: 80
-match_thresh: 0.8
-gmc_method: sparseOptFlow
-        """)
-
     # --------------------- HELPER FUNCTIONS ---------------------
-    def get_dominant_color(frame, box, k=2):
+    def get_average_color(frame, box):
         x1, y1, x2, y2 = [int(i) for i in box]
         roi = frame[y1:y2, x1:x2]
         if roi.size == 0:
             return np.array([0, 0, 0])
-        roi = roi.reshape((-1, 3))
-        roi = np.float32(roi)
-        _, labels, centers = cv2.kmeans(roi, k, None,
-                                        (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0),
-                                        10, cv2.KMEANS_RANDOM_CENTERS)
-        counts = np.bincount(labels.flatten())
-        dominant = centers[np.argmax(counts)]
-        return dominant
+        return np.mean(roi.reshape(-1, 3), axis=0)
 
     def classify_team(avg_color):
         global first_team_color, second_team_color
@@ -111,9 +91,11 @@ gmc_method: sparseOptFlow
         return "A" if distA < distB else "B"
 
     def is_referee(avg_color):
+        # الحكم عادة أسود أو أصفر
         return (np.mean(avg_color) < 60) or (avg_color[1] > 150 and avg_color[0] < 80)
 
     def is_goalkeeper(y1, y2, frame_height):
+        # الحارس قريب من المرمى (أعلى أو أسفل الشاشة)
         return y2 < frame_height * 0.25 or y1 > frame_height * 0.75
 
     def find_player_with_ball(ball_box, player_boxes):
@@ -139,7 +121,7 @@ gmc_method: sparseOptFlow
         source=temp_input.name,
         conf=0.4,
         iou=0.5,
-        tracker=botsort_path,
+        tracker="botsort.yaml",
         persist=True,
         stream=True
     )
@@ -161,15 +143,17 @@ gmc_method: sparseOptFlow
 
         for box, cls, track_id in zip(boxes, classes, ids):
             x1, y1, x2, y2 = map(int, box)
-            avg_color = get_dominant_color(frame, (x1, y1, x2, y2))
+            avg_color = get_average_color(frame, (x1, y1, x2, y2))
 
-            if cls == 0:  # Ball
+            # Ball
+            if cls == 0:
                 ball_box = (x1, y1, x2, y2)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color_ball, 3)
                 cv2.putText(frame, "Ball", (x1, y1 - 10),
                             cv2.FONT_HERSHEY_DUPLEX, 0.8, color_ball, 2)
 
-            elif cls in [1, 2, 3]:  # Player / Referee / Goalkeeper
+            # Player or Referee or Goalkeeper
+            elif cls in [1, 2, 3]:
                 if is_referee(avg_color):
                     role = "Referee"
                     color = color_referee
@@ -186,11 +170,12 @@ gmc_method: sparseOptFlow
                 cv2.putText(frame, f"{role} #{track_id}", (x1, y1 - 10),
                             cv2.FONT_HERSHEY_DUPLEX, 0.7, color, 2)
 
+        # تحديد اللاعب اللي معاه الكورة
         if ball_box and len(player_boxes) > 0:
             player_with_ball_id = find_player_with_ball(ball_box, player_boxes)
             if player_with_ball_id in player_boxes:
                 x1, y1, x2, y2 = player_boxes[player_with_ball_id]
-                cv2.putText(frame, "has ball", (x1, y1 - 35),
+                cv2.putText(frame, "has a ball", (x1, y1 - 35),
                             cv2.FONT_HERSHEY_DUPLEX, 0.8, color_text_black, 2)
 
         out.write(frame)
@@ -205,6 +190,7 @@ gmc_method: sparseOptFlow
         video_bytes = video_file.read()
         st.video(video_bytes)
 
+    # --------------------- DOWNLOAD BUTTON ---------------------
     b64 = base64.b64encode(video_bytes).decode()
     href = f'<a href="data:video/mp4;base64,{b64}" download="processed_football_video.mp4">⬇️ Download Processed Video</a>'
     st.markdown(href, unsafe_allow_html=True)
