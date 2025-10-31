@@ -40,7 +40,6 @@ if uploaded_video is not None:
     temp_input = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
     temp_input.write(uploaded_video.read())
 
-    # --------------------- MODEL ---------------------
     model_path = "yolov8m-football_ball_only.pt"
     if not os.path.exists(model_path):
         st.error("⚠️ Model file not found! Please upload 'yolov8m-football_ball_only.pt' in the same folder.")
@@ -51,22 +50,20 @@ if uploaded_video is not None:
     cap = cv2.VideoCapture(temp_input.name)
     w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
-
     output_path = os.path.join(tempfile.gettempdir(), "processed_football_video.mp4")
     out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
 
     # --------------------- COLORS ---------------------
     color_ball = (0, 255, 255)
-    color_referee = (0, 255, 0)
-    color_goalkeeper = (0, 255, 255)
+    color_referee = (255, 255, 0)
     color_team_a = (0, 0, 255)
     color_team_b = (255, 0, 0)
     color_text_black = (0, 0, 0)
 
+    team_reference_colors = {}
     first_team_color = None
     second_team_color = None
 
-    # --------------------- HELPER FUNCTIONS ---------------------
     def get_average_color(frame, box):
         x1, y1, x2, y2 = [int(i) for i in box]
         roi = frame[y1:y2, x1:x2]
@@ -89,14 +86,6 @@ if uploaded_video is not None:
         distA = np.linalg.norm(avg_color - first_team_color)
         distB = np.linalg.norm(avg_color - second_team_color)
         return "A" if distA < distB else "B"
-
-    def is_referee(avg_color):
-        # الحكم عادة أسود أو أصفر
-        return (np.mean(avg_color) < 60) or (avg_color[1] > 150 and avg_color[0] < 80)
-
-    def is_goalkeeper(y1, y2, frame_height):
-        # الحارس قريب من المرمى (أعلى أو أسفل الشاشة)
-        return y2 < frame_height * 0.25 or y1 > frame_height * 0.75
 
     def find_player_with_ball(ball_box, player_boxes):
         bx1, by1, bx2, by2 = [int(i) for i in ball_box]
@@ -143,7 +132,6 @@ if uploaded_video is not None:
 
         for box, cls, track_id in zip(boxes, classes, ids):
             x1, y1, x2, y2 = map(int, box)
-            avg_color = get_average_color(frame, (x1, y1, x2, y2))
 
             # Ball
             if cls == 0:
@@ -152,23 +140,21 @@ if uploaded_video is not None:
                 cv2.putText(frame, "Ball", (x1, y1 - 10),
                             cv2.FONT_HERSHEY_DUPLEX, 0.8, color_ball, 2)
 
-            # Player or Referee or Goalkeeper
-            elif cls in [1, 2, 3]:
-                if is_referee(avg_color):
-                    role = "Referee"
-                    color = color_referee
-                elif is_goalkeeper(y1, y2, h):
-                    role = "Goalkeeper"
-                    color = color_goalkeeper
-                else:
-                    team = classify_team(avg_color)
-                    role = f"Team {team}"
-                    color = color_team_a if team == "A" else color_team_b
-                    player_boxes[track_id] = (x1, y1, x2, y2)
-
+            # Player
+            elif cls in [1, 2]:
+                avg_color = get_average_color(frame, (x1, y1, x2, y2))
+                team = classify_team(avg_color)
+                color = color_team_a if team == "A" else color_team_b
+                player_boxes[track_id] = (x1, y1, x2, y2)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, f"{role} #{track_id}", (x1, y1 - 10),
+                cv2.putText(frame, f"Team {team} #{track_id}", (x1, y1 - 10),
                             cv2.FONT_HERSHEY_DUPLEX, 0.7, color, 2)
+
+            # Referee
+            elif cls == 3:
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color_referee, 2)
+                cv2.putText(frame, "Referee", (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.6, color_referee, 2)
 
         # تحديد اللاعب اللي معاه الكورة
         if ball_box and len(player_boxes) > 0:
