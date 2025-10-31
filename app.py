@@ -1,10 +1,10 @@
 import streamlit as st
 import cv2
-import numpy as np
-from ultralytics import YOLO
 import tempfile
-import os
 import base64
+import os
+from ultralytics import YOLO
+import torch
 
 # --------------------- PAGE SETUP ---------------------
 st.set_page_config(page_title="Football Detection & Tracking", layout="wide")
@@ -28,137 +28,55 @@ st.markdown(
             background-size: cover;
             background-position: center;
         }
+        [data-testid="stHeader"] {background: rgba(0,0,0,0);}
     </style>
     """,
     unsafe_allow_html=True
 )
 
-# --------------------- VIDEO UPLOAD ---------------------
-uploaded_video = st.file_uploader("🎬 Upload a football match video", type=["mp4", "mov", "avi"])
+# --------------------- FILE UPLOAD ---------------------
+uploaded_file = st.file_uploader("📥 Upload a football match video", type=["mp4", "avi", "mov"])
 
-if uploaded_video is not None:
-    temp_input = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-    temp_input.write(uploaded_video.read())
+if uploaded_file is not None:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        video_path = tmp_file.name
 
-    # --------------------- MODEL ---------------------
+    st.info("⚙️ Processing video... Please wait.")
+
+    # --------------------- LOAD MODEL ---------------------
     model_path = "yolov8m-football_ball_only.pt"
     if not os.path.exists(model_path):
-        st.error("⚠️ Model file not found! Please upload 'yolov8m-football_ball_only.pt' in the same folder.")
+        st.error("❌ Model file not found. Please ensure yolov8m-football_ball_only.pt is in the same directory.")
         st.stop()
 
     model = YOLO(model_path)
 
-    # --------------------- VIDEO SETTINGS ---------------------
-    cap = cv2.VideoCapture(temp_input.name)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    # --------------------- OUTPUT PATH ---------------------
+    output_path = os.path.join(tempfile.gettempdir(), "processed_output.mp4")
 
-    output_path = os.path.join(tempfile.gettempdir(), "processed_football_video.mp4")
-    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
-
-    # --------------------- COLORS ---------------------
-    color_ball = (0, 255, 255)
-    color_referee = (200, 200, 200)
-    color_keeper = (0, 255, 0)
-    color_team_a = (0, 0, 255)
-    color_team_b = (255, 0, 0)
-    team_colors = {}
-
-    def get_average_color(frame, box):
-        x1, y1, x2, y2 = box
-        roi = frame[y1:y2, x1:x2]
-        if roi.size == 0:
-            return np.array([0, 0, 0])
-        return np.mean(roi.reshape(-1, 3), axis=0)
-
-    def assign_team(player_id, avg_color):
-        if player_id not in team_colors:
-            if np.mean(avg_color) < 128:
-                team_colors[player_id] = "A"
-            else:
-                team_colors[player_id] = "B"
-        return team_colors[player_id]
-
-    def is_ball_near_player(ball_box, player_box):
-        bx1, by1, bx2, by2 = ball_box
-        px1, py1, px2, py2 = player_box
-        ball_center = ((bx1 + bx2) // 2, (by1 + by2) // 2)
-        player_center = ((px1 + px2) // 2, (py1 + py2) // 2)
-        dist = np.linalg.norm(np.array(ball_center) - np.array(player_center))
-        return dist < 50  # المسافة المعتبرة للحيازة
-
-    # --------------------- PROCESSING ---------------------
-    st.info("🚀 Processing video... please wait.")
-    progress = st.progress(0)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_num = 0
-
+    # --------------------- PROCESS VIDEO ---------------------
     results = model.track(
-        source=temp_input.name,
-        conf=0.4,
-        iou=0.5,
-        tracker="botsort.yaml",
-        persist=True,
-        stream=True
+        source=video_path,
+        save=True,
+        project=tempfile.gettempdir(),
+        name="football_tracking",
+        tracker="bytetrack.yaml",
+        show=False
     )
 
-    for frame_data in results:
-        frame = frame_data.orig_img.copy()
-        frame_num += 1
-        progress.progress(frame_num / total_frames)
+    # Find saved output file
+    output_dir = os.path.join(tempfile.gettempdir(), "football_tracking")
+    for file in os.listdir(output_dir):
+        if file.endswith(".mp4"):
+            output_path = os.path.join(output_dir, file)
+            break
 
-        if frame_data.boxes.id is None:
-            out.write(frame)
-            continue
-
-        boxes = frame_data.boxes.xyxy.cpu().numpy()
-        classes = frame_data.boxes.cls.cpu().numpy().astype(int)
-        ids = frame_data.boxes.id.cpu().numpy().astype(int)
-
-        ball_boxes = [box for box, cls in zip(boxes, classes) if cls == 0]
-
-        for box, cls, track_id in zip(boxes, classes, ids):
-            x1, y1, x2, y2 = map(int, box)
-
-            # Ball
-            if cls == 0:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color_ball, 3)
-                cv2.putText(frame, "Ball", (x1, y1 - 10), cv2.FONT_HERSHEY_DUPLEX, 0.8, color_ball, 2)
-
-            # Player
-            elif cls == 1:
-                avg_color = get_average_color(frame, (x1, y1, x2, y2))
-                team = assign_team(track_id, avg_color)
-                color = color_team_a if team == "A" else color_team_b
-                has_ball = any(is_ball_near_player(ball_box, (x1, y1, x2, y2)) for ball_box in ball_boxes)
-
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                label = f"Team {team} #{track_id}"
-                if has_ball:
-                    label += " 🟢 has ball"
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_DUPLEX, 0.7, color, 2)
-
-            # Referee
-            elif cls == 2:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color_referee, 2)
-                cv2.putText(frame, "Referee", (x1, y1 - 10), cv2.FONT_HERSHEY_DUPLEX, 0.6, color_referee, 2)
-
-            # Goalkeeper
-            elif cls == 3:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color_keeper, 2)
-                cv2.putText(frame, "Goalkeeper", (x1, y1 - 10), cv2.FONT_HERSHEY_DUPLEX, 0.7, color_keeper, 2)
-
-        out.write(frame)
-
-    cap.release()
-    out.release()
-
+    # --------------------- SUCCESS MESSAGE ---------------------
     st.success("✅ Tracking Complete!")
 
     # --------------------- DISPLAY OUTPUT ---------------------
     st.markdown("<h3 style='text-align:center;'>🎥 Processed Video</h3>", unsafe_allow_html=True)
-
     with open(output_path, "rb") as video_file:
         video_bytes = video_file.read()
         st.video(video_bytes)
