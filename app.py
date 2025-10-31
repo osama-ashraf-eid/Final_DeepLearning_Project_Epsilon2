@@ -1,10 +1,10 @@
 import streamlit as st
 import cv2
-import tempfile
-import base64
-import os
-import time
+import numpy as np
 from ultralytics import YOLO
+import tempfile
+import os
+import base64
 
 # --------------------- PAGE SETUP ---------------------
 st.set_page_config(page_title="Football Detection & Tracking", layout="wide")
@@ -28,115 +28,172 @@ st.markdown(
             background-size: cover;
             background-position: center;
         }
-        [data-testid="stHeader"] {background: rgba(0,0,0,0);}
     </style>
     """,
     unsafe_allow_html=True
 )
 
-# --------------------- FILE UPLOAD ---------------------
-uploaded_file = st.file_uploader("📥 Upload a football match video", type=["mp4", "avi", "mov"])
+# --------------------- VIDEO UPLOAD ---------------------
+uploaded_video = st.file_uploader("🎬 Upload a football match video", type=["mp4", "mov", "avi"])
 
-if uploaded_file is not None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
-        tmp_file.write(uploaded_file.read())
-        video_path = tmp_file.name
+if uploaded_video is not None:
+    temp_input = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+    temp_input.write(uploaded_video.read())
 
-    st.info("⚙️ Processing video... Please wait.")
-    progress = st.progress(0)
-
-    # --------------------- LOAD MODEL ---------------------
+    # --------------------- MODEL ---------------------
     model_path = "yolov8m-football_ball_only.pt"
     if not os.path.exists(model_path):
-        st.error("❌ Model file not found. Please ensure 'yolov8m-football_ball_only.pt' is in the same directory.")
+        st.error("⚠️ Model file not found! Please upload 'yolov8m-football_ball_only.pt' in the same folder.")
         st.stop()
 
     model = YOLO(model_path)
 
-    # --------------------- PROCESS VIDEO ---------------------
-    output_dir = "outputs"
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = None
+    cap = cv2.VideoCapture(temp_input.name)
+    w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
 
-    try:
-        for percent in range(0, 50, 10):
-            time.sleep(0.2)
-            progress.progress(percent)
+    output_path = os.path.join(tempfile.gettempdir(), "processed_football_video.mp4")
+    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
 
-        # Run YOLO tracking
-        results = model.track(
-            source=video_path,
-            save=True,
-            project=output_dir,
-            name="football_tracking",
-            tracker="bytetrack.yaml",
-            show=False
-        )
+    # --------------------- COLORS ---------------------
+    color_ball = (0, 255, 255)
+    color_referee = (0, 255, 0)
+    color_goalkeeper = (0, 255, 255)
+    color_team_a = (0, 0, 255)
+    color_team_b = (255, 0, 0)
+    color_text_black = (0, 0, 0)
 
-        for percent in range(50, 101, 10):
-            time.sleep(0.2)
-            progress.progress(percent)
+    first_team_color = None
+    second_team_color = None
 
-        # Try to find saved video
-        output_subdir = os.path.join(output_dir, "football_tracking")
-        if os.path.exists(output_subdir):
-            for root, _, files in os.walk(output_subdir):
-                for f in files:
-                    if f.endswith(".mp4"):
-                        output_path = os.path.join(root, f)
-                        break
+    # --------------------- HELPER FUNCTIONS ---------------------
+    def get_average_color(frame, box):
+        x1, y1, x2, y2 = [int(i) for i in box]
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return np.array([0, 0, 0])
+        return np.mean(roi.reshape(-1, 3), axis=0)
 
-    except Exception as e:
-        st.error(f"❌ Error during tracking: {e}")
-        st.stop()
+    def classify_team(avg_color):
+        global first_team_color, second_team_color
+        if first_team_color is None:
+            first_team_color = avg_color
+            return "A"
+        if second_team_color is None:
+            dist = np.linalg.norm(avg_color - first_team_color)
+            if dist > 40:
+                second_team_color = avg_color
+                return "B"
+            else:
+                return "A"
+        distA = np.linalg.norm(avg_color - first_team_color)
+        distB = np.linalg.norm(avg_color - second_team_color)
+        return "A" if distA < distB else "B"
 
-    # --------------------- FALLBACK: Manual Save ---------------------
-    if output_path is None or not os.path.exists(output_path):
-        st.warning("⚠️ YOLO did not save output automatically — generating video manually.")
-        try:
-            results = model.track(source=video_path, tracker="bytetrack.yaml", show=False, save=False)
+    def is_referee(avg_color):
+        # الحكم عادة أسود أو أصفر
+        return (np.mean(avg_color) < 60) or (avg_color[1] > 150 and avg_color[0] < 80)
 
-            manual_path = os.path.join(output_dir, "manual_tracking_output.mp4")
-            cap = cv2.VideoCapture(video_path)
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            out = cv2.VideoWriter(manual_path, fourcc, fps, (width, height))
+    def is_goalkeeper(y1, y2, frame_height):
+        # الحارس قريب من المرمى (أعلى أو أسفل الشاشة)
+        return y2 < frame_height * 0.25 or y1 > frame_height * 0.75
 
-            frame_idx = 0
-            for result in results:
-                if result is not None:
-                    frame = result.plot()
-                    out.write(frame)
-                    frame_idx += 1
+    def find_player_with_ball(ball_box, player_boxes):
+        bx1, by1, bx2, by2 = [int(i) for i in ball_box]
+        ball_center = np.array([(bx1 + bx2) / 2, (by1 + by2) / 2])
+        min_dist = float('inf')
+        nearest_id = None
+        for pid, (x1, y1, x2, y2) in player_boxes.items():
+            player_center = np.array([(x1 + x2) / 2, (y1 + y2) / 2])
+            dist = np.linalg.norm(ball_center - player_center)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_id = pid
+        return nearest_id
 
-            cap.release()
-            out.release()
-            output_path = manual_path
+    # --------------------- PROCESSING ---------------------
+    st.info("🚀 Processing video... please wait.")
+    progress = st.progress(0)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_num = 0
 
-            st.success(f"✅ Manual video saved successfully ({frame_idx} frames).")
+    results = model.track(
+        source=temp_input.name,
+        conf=0.4,
+        iou=0.5,
+        tracker="botsort.yaml",
+        persist=True,
+        stream=True
+    )
 
-        except Exception as e:
-            st.error(f"❌ Manual saving failed: {e}")
-            st.stop()
+    for frame_data in results:
+        frame = frame_data.orig_img.copy()
+        frame_num += 1
+        progress.progress(frame_num / total_frames)
+        if frame_data.boxes.id is None:
+            out.write(frame)
+            continue
 
-    # --------------------- DISPLAY RESULT ---------------------
-    if output_path and os.path.exists(output_path):
-        st.success("✅ Tracking Complete!")
+        boxes = frame_data.boxes.xyxy.cpu().numpy()
+        classes = frame_data.boxes.cls.cpu().numpy().astype(int)
+        ids = frame_data.boxes.id.cpu().numpy().astype(int)
 
-        st.markdown("<h3 style='text-align:center;'>🎥 Processed Video</h3>", unsafe_allow_html=True)
-        with open(output_path, "rb") as video_file:
-            video_bytes = video_file.read()
-            st.video(video_bytes)
+        player_boxes = {}
+        ball_box = None
 
-        # --------------------- DOWNLOAD BUTTON ---------------------
-        b64 = base64.b64encode(video_bytes).decode()
-        href = f'<a href="data:video/mp4;base64,{b64}" download="processed_football_video.mp4">⬇️ Download Processed Video</a>'
-        st.markdown(href, unsafe_allow_html=True)
+        for box, cls, track_id in zip(boxes, classes, ids):
+            x1, y1, x2, y2 = map(int, box)
+            avg_color = get_average_color(frame, (x1, y1, x2, y2))
 
-    else:
-        st.error("❌ No output video could be generated even after manual fallback.")
+            # Ball
+            if cls == 0:
+                ball_box = (x1, y1, x2, y2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color_ball, 3)
+                cv2.putText(frame, "Ball", (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.8, color_ball, 2)
+
+            # Player or Referee or Goalkeeper
+            elif cls in [1, 2, 3]:
+                if is_referee(avg_color):
+                    role = "Referee"
+                    color = color_referee
+                elif is_goalkeeper(y1, y2, h):
+                    role = "Goalkeeper"
+                    color = color_goalkeeper
+                else:
+                    team = classify_team(avg_color)
+                    role = f"Team {team}"
+                    color = color_team_a if team == "A" else color_team_b
+                    player_boxes[track_id] = (x1, y1, x2, y2)
+
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, f"{role} #{track_id}", (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.7, color, 2)
+
+        # تحديد اللاعب اللي معاه الكورة
+        if ball_box and len(player_boxes) > 0:
+            player_with_ball_id = find_player_with_ball(ball_box, player_boxes)
+            if player_with_ball_id in player_boxes:
+                x1, y1, x2, y2 = player_boxes[player_with_ball_id]
+                cv2.putText(frame, "has a ball", (x1, y1 - 35),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.8, color_text_black, 2)
+
+        out.write(frame)
+
+    cap.release()
+    out.release()
+    st.success("✅ Tracking Complete!")
+
+    # --------------------- DISPLAY OUTPUT ---------------------
+    st.markdown("<h3 style='text-align:center;'>🎥 Processed Video</h3>", unsafe_allow_html=True)
+    with open(output_path, "rb") as video_file:
+        video_bytes = video_file.read()
+        st.video(video_bytes)
+
+    # --------------------- DOWNLOAD BUTTON ---------------------
+    b64 = base64.b64encode(video_bytes).decode()
+    href = f'<a href="data:video/mp4;base64,{b64}" download="processed_football_video.mp4">⬇️ Download Processed Video</a>'
+    st.markdown(href, unsafe_allow_html=True)
 
 else:
     st.info("📥 Please upload a football match video to start tracking.")
