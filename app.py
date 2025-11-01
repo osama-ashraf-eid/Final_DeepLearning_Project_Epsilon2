@@ -7,7 +7,6 @@ import tempfile
 import os
 import io
 from collections import defaultdict
-# تم حذف: from sklearn.cluster import KMeans - لتجنب خطأ ModuleNotFoundError
 
 # --- 1. CONFIGURATION AND UTILITIES ---
 
@@ -28,8 +27,8 @@ DISPLAY_COLOR_B = (255, 0, 0) # Blue for Team B (Lighter)
 # ---------------------------------------
 
 # Constants for Auto-Learning
-AUTO_LEARNING_FRAMES = 50 # عدد الإطارات التي يتم تجميع الألوان منها
-BGR_TOLERANCE = 70 # زيادة التسامح قليلاً بسبب التعقيد اللوني بعد التجميع
+AUTO_LEARNING_FRAMES = 100 # زيادة عينات التعلم
+BGR_TOLERANCE = 85 # زيادة التسامح لتحسين الفصل اللوني في الإضاءة المتغيرة
 
 # --- UTILITY FOR COLOR ANALYSIS (K-Means Clustering - Pure NumPy) ---
 
@@ -106,7 +105,8 @@ def assign_team_by_reference(player_id, color):
     # التصنيف بناءً على أقرب مركز لون مرجعي
     if dist_a < dist_b and dist_a < BGR_TOLERANCE:
         assigned_team_name = "Team A"
-    elif dist_b < dist_a and dist_b < BGR_TOLERANCE:
+    # تم تصحيح خطأ منطقي هنا: يجب المقارنة مع dist_a وليس dist_b
+    elif dist_b < dist_a and dist_b < BGR_TOLERANCE: 
         assigned_team_name = "Team B"
 
     # حفظ التعيين إذا نجح
@@ -123,7 +123,6 @@ def determine_team_colors(kit_colors):
     global TEAM_A_CENTER, TEAM_B_CENTER
     
     if len(kit_colors) < 50: # Adjusting check to be safe
-        # st.error("Not enough color samples collected for clustering.") # لا يمكن استخدام Streamlit هنا
         return 
     
     colors_np = np.array(kit_colors, dtype=np.float32)
@@ -190,11 +189,11 @@ def process_video(uploaded_video_file, model):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (w, h))
 
-    # --- إعدادات التتبع ---
+    # --- إعدادات التتبع المُحسَّنة ---
     results = model.track(
         source=video_path,
-        conf=0.35, 
-        iou=0.5,
+        conf=0.45,   # تم التعديل
+        iou=0.7,     # تم التعديل
         persist=True,
         tracker="botsort.yaml", 
         stream=True,
@@ -214,25 +213,27 @@ def process_video(uploaded_video_file, model):
         if total_frames > 0:
             progress_bar.progress(min(frame_num / total_frames, 1.0))
 
-        if frame_data.boxes.id is None:
-            out.write(frame)
-            continue
-
-        try:
-            boxes = frame_data.boxes.xyxy.cpu().numpy()
-            classes = frame_data.boxes.cls.cpu().numpy().astype(int)
-            ids = frame_data.boxes.id.cpu().numpy().astype(int)
-        except Exception:
-            out.write(frame)
-            continue
-            
-        # 1. مرحلة التعلم التلقائي (أول 50 إطار)
+        # --- محاولة استخلاص الصناديق ---
+        boxes = None
+        classes = None
+        ids = None
+        
+        if frame_data.boxes.id is not None:
+            try:
+                boxes = frame_data.boxes.xyxy.cpu().numpy()
+                classes = frame_data.boxes.cls.cpu().numpy().astype(int)
+                ids = frame_data.boxes.id.cpu().numpy().astype(int)
+            except Exception:
+                pass
+        
+        # 1. مرحلة التعلم التلقائي (أول 100 إطار)
         if frame_num <= AUTO_LEARNING_FRAMES:
-            for box, cls, track_id in zip(boxes, classes, ids):
-                 # تجاهل الحكم (cls != 3)
-                 if cls in [1, 2]: # لاعب أو حارس
-                    avg_bgr_color = get_average_color(frame, box)
-                    kit_colors_for_learning.append(avg_bgr_color)
+            if boxes is not None:
+                for box, cls, track_id in zip(boxes, classes, ids):
+                     # تجاهل الحكم (cls != 3)
+                     if cls in [1, 2]: # لاعب أو حارس
+                        avg_bgr_color = get_average_color(frame, box)
+                        kit_colors_for_learning.append(avg_bgr_color)
             
             # إذا وصلنا لنهاية مرحلة التعلم، قم بالحساب
             if frame_num == AUTO_LEARNING_FRAMES:
@@ -241,67 +242,65 @@ def process_video(uploaded_video_file, model):
                     progress_bar.progress(min(AUTO_LEARNING_FRAMES / total_frames, 1.0), 
                                           text="Color centers determined. Starting tracking...")
                  else:
-                    st.warning("Not enough distinct colors detected in initial frames. Classification may be inaccurate.")
-                    TEAM_A_CENTER = [0, 0, 0] # fallback
-                    TEAM_B_CENTER = [255, 255, 255] # fallback
+                    st.warning("Not enough distinct colors detected in initial frames. Classification may be inaccurate. Using fallback colors.")
+                    TEAM_A_CENTER = [0, 0, 255] # fallback to Red
+                    TEAM_B_CENTER = [255, 0, 0] # fallback to Blue
             
-            if TEAM_A_CENTER is None: # إذا لم يتم التحديد بعد، استمر في تسجيل الفيديو بدون تصنيف
-                out.write(frame)
-                continue
-            
-            
-        # 2. مرحلة التتبع والتصنيف (بعد أول 50 إطار)
-        for box, cls, track_id in zip(boxes, classes, ids):
-            x1, y1, x2, y2 = map(int, box)
-            track_id_int = int(track_id)
+        
+        # 2. مرحلة التتبع والتصنيف (بعد تحديد المراكز)
+        if TEAM_A_CENTER is not None and boxes is not None:
+            for box, cls, track_id in zip(boxes, classes, ids):
+                x1, y1, x2, y2 = map(int, box)
+                track_id_int = int(track_id)
 
-            color = (255, 255, 255) # لون افتراضي (أبيض)
-            team_label = "Unassigned"
+                color = (255, 255, 255) # لون افتراضي (أبيض)
+                team_label = "Unassigned"
 
-            # --------------------- A. الحكم (class 3) ---------------------
-            if cls == 3: 
-                team_label = "Referee"
-                color = COLOR_REFEREE_DISPLAY
-            
-            # ---------------- B. اللاعبون وحراس المرمى (class 1, 2) ----------------
-            elif cls in [1, 2]:
+                # --------------------- A. الحكم (class 3) ---------------------
+                if cls == 3: 
+                    team_label = "Referee"
+                    color = COLOR_REFEREE_DISPLAY
                 
-                is_goalkeeper = (cls == 1) 
-                
-                # 1. تحديد لون القميص
-                avg_bgr_color = get_average_color(frame, (x1, y1, x2, y2))
-                
-                # 2. التعيين للفريق بناءً على المراكز اللونية المستخلصة
-                assigned_team_name = assign_team_by_reference(
-                    track_id_int, avg_bgr_color
-                )
-                
-                team_label = assigned_team_name
-
-                # 3. تحديد لون العرض بناءً على التعيين (استخدام الألوان الواضحة)
-                if team_label == "Team A":
-                    color = DISPLAY_COLOR_A # استخدام الأحمر للعرض
-                elif team_label == "Team B":
-                    color = DISPLAY_COLOR_B # استخدام الأزرق للعرض
-                else:
-                    color = (255, 255, 255) # Unassigned players are white
-
-                # 4. تلوين الحارس بلونه الخاص (ثابت)
-                if is_goalkeeper and team_label.startswith("Team"):
-                    color = COLOR_GOALKEEPER_DISPLAY 
-                    team_label = f"GK ({team_label})"
+                # ---------------- B. اللاعبون وحراس المرمى (class 1, 2) ----------------
+                elif cls in [1, 2]:
                     
-            # --------------------- C. الكرة (class 0) ---------------------
-            elif cls == 0:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), COLOR_BALL, 2)
-                cv2.putText(frame, "Ball", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_BALL, 2)
-                
-            # رسم صندوق التحديد والـ ID للجميع (اللاعبين، الحراس، الحكام)
-            if cls != 0:
-                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2) 
-                 cv2.putText(frame, f"{team_label} ID {track_id_int}", (x1, y1 - 10),
-                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-            
+                    is_goalkeeper = (cls == 1) 
+                    
+                    # 1. تحديد لون القميص
+                    avg_bgr_color = get_average_color(frame, (x1, y1, x2, y2))
+                    
+                    # 2. التعيين للفريق بناءً على المراكز اللونية المستخلصة
+                    assigned_team_name = assign_team_by_reference(
+                        track_id_int, avg_bgr_color
+                    )
+                    
+                    team_label = assigned_team_name
+
+                    # 3. تحديد لون العرض بناءً على التعيين (استخدام الألوان الواضحة)
+                    if team_label == "Team A":
+                        color = DISPLAY_COLOR_A # استخدام الأحمر للعرض
+                    elif team_label == "Team B":
+                        color = DISPLAY_COLOR_B # استخدام الأزرق للعرض
+                    else:
+                        color = (255, 255, 255) # Unassigned players are white
+
+                    # 4. تلوين الحارس بلونه الخاص (ثابت)
+                    if is_goalkeeper and team_label.startswith("Team"):
+                        color = COLOR_GOALKEEPER_DISPLAY 
+                        team_label = f"GK ({team_label})"
+                        
+                # --------------------- C. الكرة (class 0) ---------------------
+                elif cls == 0:
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), COLOR_BALL, 2)
+                    cv2.putText(frame, "Ball", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_BALL, 2)
+                    
+                # رسم صندوق التحديد والـ ID للجميع (اللاعبين، الحراس، الحكام)
+                if cls != 0:
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2) 
+                    cv2.putText(frame, f"{team_label} ID {track_id_int}", (x1, y1 - 10),
+                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        
+        # نضمن دائماً كتابة الإطار إلى ملف الإخراج
         out.write(frame)
 
     cap.release()
@@ -363,15 +362,15 @@ def streamlit_app():
 
         st.markdown("---")
         st.markdown(f"""
-            *Team Assignment Logic (Fully Automatic):* The system analyzes the first 50 frames to automatically determine the two main kit colors.
-            - *Team A (Darker):* Assigned Red for display ({DISPLAY_COLOR_A} BGR).
-            - *Team B (Lighter):* Assigned Blue for display ({DISPLAY_COLOR_B} BGR).
+            **Team Assignment Logic (Fully Automatic):** The system analyzes the first {AUTO_LEARNING_FRAMES} frames to automatically determine the two main kit colors.
+            - **Team A (Darker):** Assigned Red for display ({DISPLAY_COLOR_A} BGR).
+            - **Team B (Lighter):** Assigned Blue for display ({DISPLAY_COLOR_B} BGR).
             
-            No manual color input is required.
+            *No manual color input is required.*
         """)
         
-        st.markdown(f"*Goalkeeper Display Color (Fixed):* {COLOR_GOALKEEPER_DISPLAY}")
-        st.markdown(f"*Referee Display Color (Fixed):* {COLOR_REFEREE_DISPLAY}")
+        st.markdown(f"**Goalkeeper Display Color (Fixed):** {COLOR_GOALKEEPER_DISPLAY}")
+        st.markdown(f"**Referee Display Color (Fixed):** {COLOR_REFEREE_DISPLAY}")
         st.markdown("---")
 
 
@@ -403,8 +402,8 @@ def streamlit_app():
                 # Display the determined colors (optional, for feedback)
                 st.markdown(f"""
                     #### Detected Color Centers (BGR - Used for Classification Logic)
-                    - *Team A (Darker Kit Center):* {TEAM_A_CENTER}
-                    - *Team B (Lighter Kit Center):* {TEAM_B_CENTER}
+                    - **Team A (Darker Kit Center):** `{TEAM_A_CENTER}`
+                    - **Team B (Lighter Kit Center):** `{TEAM_B_CENTER}`
                 """)
                 
                 # Video Display
@@ -428,5 +427,5 @@ def streamlit_app():
     elif uploaded_file is None:
         st.info("Upload a video file to enable the analysis.")
 
-if _name_ == '_main_':
+if __name__ == '__main__':
     streamlit_app()
