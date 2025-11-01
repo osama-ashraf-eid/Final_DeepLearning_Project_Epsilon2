@@ -17,9 +17,9 @@ CLASS_NAMES = {0: 'ball', 1: 'goalkeeper', 2: 'player', 3: 'referee'}
 MODEL_PATH = "yolov8m-football_ball_only.pt" 
 
 # Fixed Display Colors (Roles are visually distinct)
-COLOR_BALL = (0, 255, 255) # Yellow/Cyan
-COLOR_REFEREE_DISPLAY = (0, 165, 255) # Orange/Amber
-COLOR_GOALKEEPER_DISPLAY = (0, 255, 255) # Yellow
+COLOR_BALL = (0, 255, 255)       # Yellow/Cyan - الكرة
+COLOR_REFEREE_DISPLAY = (255, 0, 255) # Magenta/Fuchsia - الحكم (تغيير للوضوح)
+COLOR_GOALKEEPER_DISPLAY = (0, 255, 0) # Green - الحارس (تغيير للوضوح)
 
 # --- NEW DISPLAY COLORS FOR CLARITY ---
 DISPLAY_COLOR_A = (0, 0, 255) # Red for Team A (Darker)
@@ -27,12 +27,11 @@ DISPLAY_COLOR_B = (255, 0, 0) # Blue for Team B (Lighter)
 # ---------------------------------------
 
 # Constants for Auto-Learning
-AUTO_LEARNING_FRAMES = 100 # زيادة عينات التعلم
+FAST_LEARNING_FRAMES = 5  # *جديد*: التعلم الأولي السريع
+AUTO_LEARNING_FRAMES = 100 # التعلم النهائي لجمع عينات أكثر
 BGR_TOLERANCE = 85 # زيادة التسامح لتحسين الفصل اللوني في الإضاءة المتغيرة
-# ---------------------------------------
 # CONSTANTS FOR BALL PROXIMITY
-BALL_PROXIMITY_THRESHOLD = 150 # المسافة القصوى بالبكسل لاعتبار اللاعب يمتلك الكرة
-# ---------------------------------------
+BALL_PROXIMITY_THRESHOLD = 70 # *تعديل*: المسافة القصوى بالبكسل لاعتبار اللاعب يمتلك الكرة
 
 # --- UTILITY FOR COLOR ANALYSIS (K-Means Clustering - Pure NumPy) ---
 
@@ -62,7 +61,6 @@ def simple_kmeans_numpy(data, k=2, max_iters=10):
 
     for _ in range(max_iters):
         # 2. Assignment Step: Find the nearest centroid for each data point
-        # توسيع Centroids و Data لتتمكن NumPy من حساب المسافات لجميع النقاط دفعة واحدة
         distances = np.sqrt(((data - centroids[:, np.newaxis])**2).sum(axis=2))
         labels = np.argmin(distances, axis=0)
 
@@ -109,7 +107,6 @@ def assign_team_by_reference(player_id, color):
     # التصنيف بناءً على أقرب مركز لون مرجعي
     if dist_a < dist_b and dist_a < BGR_TOLERANCE:
         assigned_team_name = "Team A"
-    # تم تصحيح خطأ منطقي هنا: يجب المقارنة مع dist_a وليس dist_b
     elif dist_b < dist_a and dist_b < BGR_TOLERANCE: 
         assigned_team_name = "Team B"
 
@@ -120,39 +117,39 @@ def assign_team_by_reference(player_id, color):
     return assigned_team_name
 
 
-def determine_team_colors(kit_colors):
+def determine_team_colors(kit_colors, is_final=False):
     """
-    يطبق خوارزمية K-Means (باستخدام NumPy) لتحديد مركزي اللون (K=2) للفريقين.
+    يطبق خوارزمية K-Means لتحديد مركزي اللون (K=2) للفريقين.
     """
     global TEAM_A_CENTER, TEAM_B_CENTER
     
-    if len(kit_colors) < 50: # Adjusting check to be safe
+    # إذا كانت عملية نهائية وتوجد مراكز بالفعل، لا تُعدِّل إلا إذا كانت العينات كافية
+    if not is_final and TEAM_A_CENTER is not None:
+        return
+
+    if len(kit_colors) < 10: # شرط أساسي لعمل K-Means
         return 
     
     colors_np = np.array(kit_colors, dtype=np.float32)
     
-    # تطبيق K-Means باستخدام NumPy بدلاً من scikit-learn
     centers = simple_kmeans_numpy(colors_np, k=2)
     
     if centers is None or centers.shape[0] < 2:
         return 
     
     # تحديد الفريق A و B بناءً على اللمعان (الفريق A هو الداكن)
-    # اللمعان يقاس بمتوسط قيم BGR (متوسط القيم الأقل يعني لون أغمق)
     luminosity_A = np.mean(centers[0])
     luminosity_B = np.mean(centers[1])
     
     # الفريق A هو صاحب اللمعان الأقل (الداكن)
     if luminosity_A < luminosity_B:
-        TEAM_A_CENTER = centers[0]
-        TEAM_B_CENTER = centers[1]
+        center_a, center_b = centers[0], centers[1]
     else:
-        TEAM_A_CENTER = centers[1]
-        TEAM_B_CENTER = centers[0]
+        center_a, center_b = centers[1], centers[0]
 
-    # تحويل المراكز إلى قوائم BGR integers
-    TEAM_A_CENTER = TEAM_A_CENTER.astype(int).tolist()
-    TEAM_B_CENTER = TEAM_B_CENTER.astype(int).tolist()
+    # حفظ المراكز
+    TEAM_A_CENTER = center_a.astype(int).tolist()
+    TEAM_B_CENTER = center_b.astype(int).tolist()
 
 
 # --- 2. CORE PROCESSING LOGIC ---
@@ -190,31 +187,24 @@ def process_video(uploaded_video_file, model):
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
 
-    # Use 'mp4v' for H.264 compatibility which is widely supported
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (w, h))
 
-    # --- إعدادات التتبع المُحسَّنة ---
-    # *تعديل مهم لضمان البدء من الإطار الأول: إزالة stream=True*
-    # YOLO.track() مع stream=True قد يتسبب في تأخير البدء لجمع buffer. 
-    # استخدام video_path مباشرةً يضمن بدء المعالجة من البداية.
+    # إعدادات التتبع
     results_iterator = model.track(
         source=video_path,
         conf=0.40,  
         iou=0.7,     
         persist=True,
         tracker="botsort.yaml", 
-        stream=True, # لا يزال من الأفضل استخدام stream=True للمعالجة الفعالة
+        stream=True, 
         verbose=False
     )
-    # -------------------------------------------------------------------
 
     frame_num = 0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     progress_bar = st.progress(0, text="Analyzing initial frames for team colors...")
     
-    # قائمة لتخزين نتائج الكرة
-    ball_detections = [] 
     
     for frame_data in results_iterator:
         frame_num += 1
@@ -224,10 +214,8 @@ def process_video(uploaded_video_file, model):
         if total_frames > 0:
             progress_bar.progress(min(frame_num / total_frames, 1.0))
 
-        # --- محاولة استخلاص الصناديق ---
-        boxes = None
-        classes = None
-        ids = None
+        # --- استخلاص الصناديق ---
+        boxes, classes, ids = None, None, None
         
         if frame_data.boxes.id is not None:
             try:
@@ -238,8 +226,8 @@ def process_video(uploaded_video_file, model):
                 pass
         
         # متغيرات التخزين المؤقتة
-        current_players = [] # لتخزين بيانات اللاعبين
-        current_ball = None # لتخزين بيانات الكرة
+        current_players = [] 
+        current_ball = None 
         
         if boxes is not None:
             for box, cls, track_id in zip(boxes, classes, ids):
@@ -265,25 +253,31 @@ def process_video(uploaded_video_file, model):
                     })
 
 
-        # 1. مرحلة التعلم التلقائي (أول 100 إطار)
-        if frame_num <= AUTO_LEARNING_FRAMES:
-            for player in current_players:
-                if player['cls'] in [1, 2]: # لاعب أو حارس
-                    kit_colors_for_learning.append(player['kit_center'])
-            
-            # إذا وصلنا لنهاية مرحلة التعلم، قم بالحساب
-            if frame_num == AUTO_LEARNING_FRAMES:
-                if len(kit_colors_for_learning) >= 50: # تأكد من جمع عينات كافية
-                    determine_team_colors(kit_colors_for_learning)
-                    progress_bar.progress(min(AUTO_LEARNING_FRAMES / total_frames, 1.0), 
-                                         text="Color centers determined. Starting tracking...")
-                else:
-                    st.warning("Not enough distinct colors detected in initial frames. Classification may be inaccurate. Using fallback colors.")
-                    TEAM_A_CENTER = [0, 0, 255] # fallback to Red
-                    TEAM_B_CENTER = [255, 0, 0] # fallback to Blue
+        # 1. مرحلة التعلم التلقائي السريع والنهائي
+        
+        # جمع عينات الألوان (لجميع اللاعبين غير الكرة والحكم)
+        for player in current_players:
+            if player['cls'] in [1, 2] and frame_num <= AUTO_LEARNING_FRAMES: 
+                kit_colors_for_learning.append(player['kit_center'])
+        
+        # التعلم السريع (لتفادي 'Unassigned')
+        if frame_num == FAST_LEARNING_FRAMES and len(kit_colors_for_learning) >= 10:
+             determine_team_colors(kit_colors_for_learning, is_final=False)
+             progress_bar.progress(min(FAST_LEARNING_FRAMES / total_frames, 1.0), 
+                                  text="Fast color centers determined. Starting tracking...")
+        
+        # التعلم النهائي (لتحسين الدقة)
+        if frame_num == AUTO_LEARNING_FRAMES and len(kit_colors_for_learning) >= 50:
+            determine_team_colors(kit_colors_for_learning, is_final=True)
+            progress_bar.progress(min(AUTO_LEARNING_FRAMES / total_frames, 1.0), 
+                                 text="Final color centers determined. Starting tracking...")
+        elif frame_num == AUTO_LEARNING_FRAMES and (TEAM_A_CENTER is None or TEAM_B_CENTER is None):
+             st.warning("Not enough distinct colors detected. Using fallback colors (Red/Blue).")
+             TEAM_A_CENTER = [0, 0, 255] # fallback to Red
+             TEAM_B_CENTER = [255, 0, 0] # fallback to Blue
         
         
-        # 2. مرحلة التتبع والتصنيف (بعد تحديد المراكز)
+        # 2. تحديد اللاعب الذي يمتلك الكرة
         player_with_ball_id = None
         if TEAM_A_CENTER is not None and current_ball is not None:
             ball_pos = np.array(current_ball[0:2])
@@ -291,17 +285,17 @@ def process_video(uploaded_video_file, model):
 
             # البحث عن أقرب لاعب للكرة
             for player in current_players:
-                # نحسب المسافة من منتصف الكرة إلى أسفل منتصف صندوق اللاعب (موقع القدم)
-                player_foot_pos = np.array(player['foot_pos'])
-                distance = np.linalg.norm(player_foot_pos - ball_pos)
-                
-                if distance < min_dist:
-                    min_dist = distance
-                    player_with_ball_id = player['id']
+                if player['cls'] in [1, 2]: # فقط اللاعبين والحراس
+                    player_foot_pos = np.array(player['foot_pos'])
+                    distance = np.linalg.norm(player_foot_pos - ball_pos)
+                    
+                    if distance < min_dist:
+                        min_dist = distance
+                        player_with_ball_id = player['id']
 
             # تحديد اللاعب الذي يمتلك الكرة
             if min_dist > BALL_PROXIMITY_THRESHOLD:
-                player_with_ball_id = None # إذا كانت المسافة كبيرة جداً، لا يوجد لاعب يمتلكها
+                player_with_ball_id = None 
 
 
         # 3. رسم الصناديق والبيانات
@@ -325,13 +319,13 @@ def process_video(uploaded_video_file, model):
                 
                 is_goalkeeper = (cls == 1) 
                 
-                # التعيين للفريق بناءً على المراكز اللونية المستخلصة
-                assigned_team_name = assign_team_by_reference(
-                    track_id_int, avg_bgr_color
-                )
+                # التعيين للفريق بناءً على المراكز اللونية المستخلصة (إذا تم تحديد المراكز)
+                if TEAM_A_CENTER is not None:
+                    assigned_team_name = assign_team_by_reference(
+                        track_id_int, avg_bgr_color
+                    )
+                    team_label = assigned_team_name
                 
-                team_label = assigned_team_name
-
                 # تحديد لون العرض بناءً على التعيين
                 if team_label == "Team A":
                     color = DISPLAY_COLOR_A # استخدام الأحمر للعرض
@@ -343,9 +337,9 @@ def process_video(uploaded_video_file, model):
                 # تلوين الحارس بلونه الخاص (ثابت)
                 if is_goalkeeper and team_label.startswith("Team"):
                     color = COLOR_GOALKEEPER_DISPLAY 
-                    team_label = f"GK ({team_label})"
+                    team_label = f"GK ({team_label.split(' ')[1]})" # إبقاء الفريق
                     
-                # إضافة نص "has a ball"
+                # *التعديل المطلوب*: إضافة نص "has a ball"
                 if track_id_int == player_with_ball_id:
                     ball_text = "(has a ball)"
                     # رسم النص فوق صندوق التحديد مباشرة
@@ -357,7 +351,7 @@ def process_video(uploaded_video_file, model):
             cv2.putText(frame, f"{team_label} ID {track_id_int}", (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-        # رسم الكرة (نستخدم البيانات المخزنة مؤقتاً لتجنب التكرار في الحلقة)
+        # رسم الكرة 
         if current_ball:
             ball_x1, ball_y1, ball_x2, ball_y2 = map(int, current_ball[2])
             cv2.rectangle(frame, (ball_x1, ball_y1), (ball_x2, ball_y2), COLOR_BALL, 2)
@@ -413,7 +407,7 @@ def streamlit_app():
     """, unsafe_allow_html=True)
 
     # Title
-    st.markdown('<div class="main-title">⚽ Football Detection & Tracking </div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">⚽ Football Detection & Tracking (Optimized) </div>', unsafe_allow_html=True)
     st.markdown("---")
     
     # Layout for inputs and preview
@@ -425,15 +419,19 @@ def streamlit_app():
 
         st.markdown("---")
         st.markdown(f"""
-            *Team Assignment Logic (Fully Automatic):* The system analyzes the first {AUTO_LEARNING_FRAMES} frames to automatically determine the two main kit colors.
-            - *Team A (Darker):* Assigned Red for display ({DISPLAY_COLOR_A} BGR).
-            - *Team B (Lighter):* Assigned Blue for display ({DISPLAY_COLOR_B} BGR).
-            
-            *Ball Possession Logic:* The player closest to the ball (within **{BALL_PROXIMITY_THRESHOLD} pixels** of the foot position) will be labeled **(has a ball)**.
+            #### 🚀 Team Assignment Logic (Optimized for Speed)
+            * **Initial Classification:** Starts after **{FAST_LEARNING_FRAMES} frames** to eliminate the long "Unassigned" delay.
+            * **Final Learning:** Centers are refined using {AUTO_LEARNING_FRAMES} frames for improved long-term accuracy.
+            * **Ball Possession:** The player closest to the ball (within **{BALL_PROXIMITY_THRESHOLD} pixels**) will be labeled **(has a ball)**.
         """)
         
-        st.markdown(f"*Goalkeeper Display Color (Fixed):* {COLOR_GOALKEEPER_DISPLAY}")
-        st.markdown(f"*Referee Display Color (Fixed):* {COLOR_REFEREE_DISPLAY}")
+        st.markdown(f"""
+            #### 🌈 Display Colors:
+            - Team A (Darker Kit): **Red**
+            - Team B (Lighter Kit): **Blue**
+            - Goalkeeper: **Green** ({COLOR_GOALKEEPER_DISPLAY} BGR)
+            - Referee: **Magenta** ({COLOR_REFEREE_DISPLAY} BGR)
+        """)
         st.markdown("---")
 
 
