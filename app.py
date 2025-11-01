@@ -192,8 +192,8 @@ def process_video(uploaded_video_file, model):
     # --- إعدادات التتبع المُحسَّنة ---
     results = model.track(
         source=video_path,
-        conf=0.45,   # تم التعديل
-        iou=0.7,     # تم التعديل
+        conf=0.40,   # تم التعديل: خفض الثقة قليلاً لتحسين كشف الحكم والكرة
+        iou=0.7,     
         persist=True,
         tracker="botsort.yaml", 
         stream=True,
