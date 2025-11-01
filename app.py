@@ -28,8 +28,8 @@ DISPLAY_COLOR_B = (255, 0, 0) # Blue for Team B (Lighter)
 # ---------------------------------------
 
 # Constants for Auto-Learning
-AUTO_LEARNING_FRAMES = 50 # عدد الإطارات التي يتم تجميع الألوان منها
-BGR_TOLERANCE = 70 # زيادة التسامح قليلاً بسبب التعقيد اللوني بعد التجميع
+AUTO_LEARNING_FRAMES = 100 # **تعديل: زيادة عينات التعلم**
+BGR_TOLERANCE = 85 # **تعديل: زيادة التسامح لتحسين الفصل اللوني في الإضاءة المتغيرة**
 
 # --- UTILITY FOR COLOR ANALYSIS (K-Means Clustering - Pure NumPy) ---
 
@@ -193,8 +193,8 @@ def process_video(uploaded_video_file, model):
     # --- إعدادات التتبع ---
     results = model.track(
         source=video_path,
-        conf=0.35, 
-        iou=0.6,
+        conf=0.45, # **تعديل: زيادة ثقة الكشف لزيادة ثبات الـ IDs**
+        iou=0.7,   # **تعديل: زيادة تداخل الكائنات لزيادة ثبات الـ IDs**
         persist=True,
         tracker="botsort.yaml", 
         stream=True,
@@ -226,7 +226,7 @@ def process_video(uploaded_video_file, model):
             out.write(frame)
             continue
             
-        # 1. مرحلة التعلم التلقائي (أول 50 إطار)
+        # 1. مرحلة التعلم التلقائي (أول 100 إطار)
         if frame_num <= AUTO_LEARNING_FRAMES:
             for box, cls, track_id in zip(boxes, classes, ids):
                  # تجاهل الحكم (cls != 3)
@@ -242,15 +242,15 @@ def process_video(uploaded_video_file, model):
                                           text="Color centers determined. Starting tracking...")
                  else:
                     st.warning("Not enough distinct colors detected in initial frames. Classification may be inaccurate.")
-                    TEAM_A_CENTER = [0, 0, 0] # fallback
-                    TEAM_B_CENTER = [255, 255, 255] # fallback
+                    TEAM_A_CENTER = [0, 0, 255] # fallback to Red
+                    TEAM_B_CENTER = [255, 0, 0] # fallback to Blue
             
             if TEAM_A_CENTER is None: # إذا لم يتم التحديد بعد، استمر في تسجيل الفيديو بدون تصنيف
                 out.write(frame)
                 continue
             
             
-        # 2. مرحلة التتبع والتصنيف (بعد أول 50 إطار)
+        # 2. مرحلة التتبع والتصنيف (بعد أول 100 إطار)
         for box, cls, track_id in zip(boxes, classes, ids):
             x1, y1, x2, y2 = map(int, box)
             track_id_int = int(track_id)
@@ -363,7 +363,7 @@ def streamlit_app():
 
         st.markdown("---")
         st.markdown(f"""
-            **Team Assignment Logic (Fully Automatic):** The system analyzes the first 50 frames to automatically determine the two main kit colors.
+            **Team Assignment Logic (Fully Automatic):** The system analyzes the first {AUTO_LEARNING_FRAMES} frames to automatically determine the two main kit colors.
             - **Team A (Darker):** Assigned Red for display ({DISPLAY_COLOR_A} BGR).
             - **Team B (Lighter):** Assigned Blue for display ({DISPLAY_COLOR_B} BGR).
             
