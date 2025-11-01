@@ -87,7 +87,8 @@ def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (w, h))
 
     possession_log = []
-    player_team_map = {} # قاموس لحفظ الـ ID والفريق المقابل له بشكل دائم بناءً على تحليل اللون
+    # قاموس لحفظ الـ ID والفريق المقابل له بشكل دائم بناءً على تحليل اللون
+    player_team_map = {} 
 
     # --- إعدادات التتبع ---
     results = model.track(
@@ -131,7 +132,7 @@ def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper
             x1, y1, x2, y2 = map(int, box)
             track_id_int = int(track_id)
 
-            color = (255, 255, 255) # لون افتراضي أبيض
+            color = (255, 255, 255) # لون افتراضي أبيض (لغير المصنفين)
             team_label = "Unassigned"
 
             # --------------------- A. الحكم (class 3) ---------------------
@@ -146,7 +147,8 @@ def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper
                 
                 # 1. محاولة الحصول على الفريق من القاموس المحفوظ (للحفاظ على الهوية)
                 if track_id_int in player_team_map:
-                    team_label = player_team_map[track_id_int]
+                    assigned_team = player_team_map[track_id_int]
+                    team_label = assigned_team
                     if team_label == "Team A":
                         color = team_a_bgr
                     else:
@@ -168,11 +170,15 @@ def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper
                 # 3. تلوين الحارس بلونه الخاص (إذا تم تصنيفه لفريق)
                 if is_goalkeeper and (team_label.startswith("Team A") or team_label.startswith("Team B")):
                     color = goalkeeper_bgr 
-                    team_label = f"GK ({team_label})"
+                    # نستخدم اسم الفريق الذي تم تصنيف الحارس إليه
+                    base_team = "Team A" if "Team A" in team_label else "Team B" 
+                    team_label = f"GK ({base_team})"
                 
                 # إضافة اللاعب/الحارس المصنف لقائمة تحليل الاستحواذ
                 if team_label.startswith("Team"):
-                    players_for_possession.append((track_id_int, (x1, y1, x2, y2), team_label))
+                    # نرسل التسمية الأساسية للفريق (Team A أو Team B)
+                    base_team_label = "Team A" if "Team A" in team_label else "Team B" 
+                    players_for_possession.append((track_id_int, (x1, y1, x2, y2), base_team_label))
                     
             # --------------------- C. الكرة (class 0) ---------------------
             elif cls == 0:
@@ -182,7 +188,9 @@ def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper
                 
             # رسم صندوق التحديد والـ ID للجميع (اللاعبين، الحراس، الحكام)
             if cls != 0:
-                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                 # استخدام اللون المخصص للفريق/الحارس/الحكم
+                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2) 
+                 # كتابة اسم الفريق أو الدور بجانب الـ ID
                  cv2.putText(frame, f"{team_label} ID {track_id_int}", (x1, y1 - 10),
                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             # -------------------------------------------------------------------
