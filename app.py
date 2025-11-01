@@ -7,6 +7,7 @@ import tempfile
 import os
 import io
 from collections import defaultdict
+from sklearn.cluster import KMeans
 
 # --- 1. CONFIGURATION AND UTILITIES ---
 
@@ -21,7 +22,11 @@ COLOR_BALL = (0, 255, 255) # Yellow/Cyan
 COLOR_REFEREE_DISPLAY = (0, 165, 255) # Orange/Amber
 COLOR_GOALKEEPER_DISPLAY = (0, 255, 255) # Yellow
 
-# --- UTILITY FOR COLOR ANALYSIS (Auto Clustering Logic) ---
+# Constants for Auto-Learning
+AUTO_LEARNING_FRAMES = 50 # عدد الإطارات التي يتم تجميع الألوان منها
+BGR_TOLERANCE = 70 # زيادة التسامح قليلاً بسبب التعقيد اللوني بعد التجميع
+
+# --- UTILITY FOR COLOR ANALYSIS (K-Means Clustering) ---
 
 def get_average_color(frame, box):
     """
@@ -35,46 +40,76 @@ def get_average_color(frame, box):
     # حساب متوسط اللون في منطقة القميص
     return np.mean(roi.reshape(-1,3), axis=0)
 
-# قاموس لتخزين الألوان المرجعية للفرق التي تم تعيينها
-# يتم تعريف هذا المتغير كـ global لإعادة تعيينه في بداية process_video
-team_color_references = {} 
+# قاموس لتخزين تعيين الفريق (Team A/Team B) لـ ID اللاعب بشكل ثابت
+team_assignment_map = {} 
+TEAM_A_CENTER = None
+TEAM_B_CENTER = None
 
-def assign_team_by_clustering(player_id, color):
+def assign_team_by_reference(player_id, color):
     """
-    يقوم بتعيين اللاعب إلى أقرب مجموعة لونية موجودة أو إنشاء مجموعة جديدة إذا كان اللون بعيداً.
-    يتبع منطق الكود المرجعي لتقليل عدد مجموعات الألوان (Cluster).
+    يقوم بتعيين اللاعب للفريق A أو B بناءً على أقرب لون مرجعي (K-Means Centers).
     """
-    global team_color_references
+    global team_assignment_map, TEAM_A_CENTER, TEAM_B_CENTER
+    
+    # 1. إذا كان اللاعب مُعيّناً بالفعل، أعد التعيين المحفوظ
+    if player_id in team_assignment_map:
+        return team_assignment_map[player_id]
+
+    if TEAM_A_CENTER is None or TEAM_B_CENTER is None:
+        return "Unassigned" # لا يمكن التصنيف قبل تحديد المراكز
+
     color_np = np.array(color)
     
-    # إذا لم يكن اللاعب مُعيّناً بالفعل
-    if player_id not in team_color_references:
-        
-        # 1. إذا كانت هذه أول عملية تعيين، قم بإنشاء المجموعة الأولى
-        if not team_color_references:
-            # نستخدم ID اللاعب كـ Key مبدئي للقيمة اللونية
-            team_color_references[player_id] = color_np 
-            return color_np 
+    # حساب المسافة الإقليدية (مسافة الألوان)
+    dist_a = np.linalg.norm(color_np - TEAM_A_CENTER)
+    dist_b = np.linalg.norm(color_np - TEAM_B_CENTER)
+    
+    assigned_team_name = "Unassigned"
+    
+    # التصنيف بناءً على أقرب مركز لون مرجعي
+    if dist_a < dist_b and dist_a < BGR_TOLERANCE:
+        assigned_team_name = "Team A"
+    elif dist_b < dist_a and dist_b < BGR_TOLERANCE:
+        assigned_team_name = "Team B"
 
-        # 2. حاول إيجاد أقرب مجموعة لونية موجودة
-        min_dist = 1e9
-        closest_player_id = None
+    # حفظ التعيين إذا نجح
+    if assigned_team_name != "Unassigned":
+        team_assignment_map[player_id] = assigned_team_name
         
-        for p_id, ref_color in team_color_references.items():
-            dist = np.linalg.norm(color_np - ref_color)
-            if dist < min_dist:
-                min_dist = dist
-                closest_player_id = p_id
-        
-        # 3. التعيين بناءً على التسامح (40 هو حد التسامح كما في الكود المرجعي)
-        if min_dist < 40:
-            # اللون قريب جداً: قم بتعيين هذا اللاعب إلى نفس مجموعة اللاعب الأقرب
-            team_color_references[player_id] = team_color_references[closest_player_id]
-        else:
-            # اللون بعيد: قم بإنشاء مجموعة لونية جديدة
-            team_color_references[player_id] = color_np
-            
-    return team_color_references[player_id].tolist()
+    return assigned_team_name
+
+
+def determine_team_colors(kit_colors):
+    """
+    يطبق خوارزمية K-Means لتحديد مركزي اللون (K=2) للفريقين.
+    """
+    global TEAM_A_CENTER, TEAM_B_CENTER
+    
+    if len(kit_colors) < 2:
+        return # لا يكفي للتجميع
+    
+    colors_np = np.array(kit_colors, dtype=np.float32)
+    
+    # تطبيق K-Means لتقسيم الألوان إلى مجموعتين
+    kmeans = KMeans(n_clusters=2, random_state=0, n_init=10)
+    kmeans.fit(colors_np)
+    centers = kmeans.cluster_centers_
+    
+    # تحديد الفريق A و B بناءً على اللمعان (الفريق A هو الداكن)
+    luminosity_A = np.mean(centers[0])
+    luminosity_B = np.mean(centers[1])
+    
+    # الفريق A هو صاحب اللمعان الأقل (الداكن)
+    if luminosity_A < luminosity_B:
+        TEAM_A_CENTER = centers[0]
+        TEAM_B_CENTER = centers[1]
+    else:
+        TEAM_A_CENTER = centers[1]
+        TEAM_B_CENTER = centers[0]
+
+    # تحويل المراكز إلى قوائم BGR integers
+    TEAM_A_CENTER = TEAM_A_CENTER.astype(int).tolist()
+    TEAM_B_CENTER = TEAM_B_CENTER.astype(int).tolist()
 
 
 # --- 2. CORE PROCESSING LOGIC ---
@@ -92,10 +127,14 @@ def load_model():
 
 def process_video(uploaded_video_file, model):
     
-    # إعادة تعيين المتغيرات العالمية في كل عملية جديدة
-    global team_color_references
-    team_color_references = {} 
+    # إعادة تعيين المتغيرات العالمية
+    global team_assignment_map, TEAM_A_CENTER, TEAM_B_CENTER
+    team_assignment_map = {} 
+    TEAM_A_CENTER = None
+    TEAM_B_CENTER = None
     
+    kit_colors_for_learning = [] # قائمة لتخزين الألوان للإطارات الأولى
+
     # Save the uploaded video to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tfile:
         tfile.write(uploaded_video_file.read())
@@ -126,7 +165,7 @@ def process_video(uploaded_video_file, model):
 
     frame_num = 0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    progress_bar = st.progress(0, text="Processing Frames...")
+    progress_bar = st.progress(0, text="Analyzing initial frames for team colors...")
     
     for frame_data in results:
         frame_num += 1
@@ -147,7 +186,31 @@ def process_video(uploaded_video_file, model):
         except Exception:
             out.write(frame)
             continue
-
+            
+        # 1. مرحلة التعلم التلقائي (أول 50 إطار)
+        if frame_num <= AUTO_LEARNING_FRAMES:
+            for box, cls, track_id in zip(boxes, classes, ids):
+                 if cls in [1, 2]: # لاعب أو حارس
+                    avg_bgr_color = get_average_color(frame, box)
+                    kit_colors_for_learning.append(avg_bgr_color)
+            
+            # إذا وصلنا لنهاية مرحلة التعلم، قم بالحساب
+            if frame_num == AUTO_LEARNING_FRAMES:
+                 if len(kit_colors_for_learning) >= 50: # تأكد من جمع عينات كافية
+                    determine_team_colors(kit_colors_for_learning)
+                    progress_bar.progress(min(AUTO_LEARNING_FRAMES / total_frames, 1.0), 
+                                          text="Color centers determined. Starting tracking...")
+                 else:
+                    st.warning("Not enough distinct colors detected in initial frames. Classification may be inaccurate.")
+                    TEAM_A_CENTER = [0, 0, 0] # fallback
+                    TEAM_B_CENTER = [255, 255, 255] # fallback
+            
+            if TEAM_A_CENTER is None: # إذا لم يتم التحديد بعد، استمر في تسجيل الفيديو بدون تصنيف
+                out.write(frame)
+                continue
+            
+            
+        # 2. مرحلة التتبع والتصنيف (بعد أول 50 إطار)
         for box, cls, track_id in zip(boxes, classes, ids):
             x1, y1, x2, y2 = map(int, box)
             track_id_int = int(track_id)
@@ -168,23 +231,23 @@ def process_video(uploaded_video_file, model):
                 # 1. تحديد لون القميص
                 avg_bgr_color = get_average_color(frame, (x1, y1, x2, y2))
                 
-                # 2. التعيين التلقائي للفريق باستخدام منطق التجميع
-                # team_color_bgr هي قيمة BGR المرجعية للمجموعة التي ينتمي إليها
-                team_color_bgr = assign_team_by_clustering(track_id_int, avg_bgr_color)
+                # 2. التعيين للفريق بناءً على المراكز اللونية المستخلصة
+                assigned_team_name = assign_team_by_reference(
+                    track_id_int, avg_bgr_color
+                )
                 
-                # 3. تعيين اسم الفريق ولون العرض بناءً على اللمعان (Luminosity)
-                # يتبع المنطق المرجعي (المجموعة الداكنة = Team A, المجموعة الفاتحة = Team B)
-                
-                # حساب متوسط لمعان اللون (الخفيف/الداكن)
-                if np.mean(team_color_bgr) < 128:
-                    color = (0, 0, 255) # أحمر/داكن للعرض
-                    team_label = "Team A" 
+                team_label = assigned_team_name
+
+                # 3. تحديد لون العرض بناءً على التعيين (لون المركز المستخلص)
+                if team_label == "Team A":
+                    color = TEAM_A_CENTER
+                elif team_label == "Team B":
+                    color = TEAM_B_CENTER
                 else:
-                    color = (255, 0, 0) # أزرق/فاتح للعرض
-                    team_label = "Team B"
+                    color = (255, 255, 255) # Unassigned players are white
 
                 # 4. تلوين الحارس بلونه الخاص (ثابت)
-                if is_goalkeeper:
+                if is_goalkeeper and team_label.startswith("Team"):
                     color = COLOR_GOALKEEPER_DISPLAY 
                     team_label = f"GK ({team_label})"
                     
@@ -208,7 +271,7 @@ def process_video(uploaded_video_file, model):
     return output_video_path
 
 
-# --- 3. STREAMLIT APP UI (Simplified) ---
+# --- 3. STREAMLIT APP UI (Fully Automated) ---
 def streamlit_app():
     # Load the model early and cache it
     model = load_model()
@@ -248,26 +311,27 @@ def streamlit_app():
     """, unsafe_allow_html=True)
 
     # Title
-    st.markdown('<div class="main-title">⚽ Football Tracking: Auto Team Assignment</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">⚽ Football Tracking: Auto-Learning Team Colors</div>', unsafe_allow_html=True)
     st.markdown("---")
-
+    
     # Layout for inputs and preview
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.subheader("1. Upload Video & Role Display Colors 🎨")
+        st.subheader("1. Upload Video (Automatic Color Detection) 🎨")
         uploaded_file = st.file_uploader("Upload an MP4 Video of a Football Match", type=["mp4"])
 
         st.markdown("---")
         st.markdown("""
-            **Automatic Team Assignment Logic:** The system automatically clusters player kit colors into two groups.  
-            - **Team A (Darker Kit):** Displayed in RED.
-            - **Team B (Lighter Kit):** Displayed in BLUE.
+            **Team Assignment Logic (Fully Automatic):** The system analyzes the first 50 frames to automatically determine the two main kit colors using **K-Means Clustering**.
+            - **Team A:** Assigned to the DARKER of the two detected colors.
+            - **Team B:** Assigned to the LIGHTER of the two detected colors.
+            
+            *No manual color input is required.*
         """)
         
-        # لا توجد مدخلات لألوان الفريقين هنا، فقط عرض ثابت للألوان
-        st.markdown(f"**Goalkeeper Display Color (Yellow):** {COLOR_GOALKEEPER_DISPLAY}")
-        st.markdown(f"**Referee Display Color (Orange):** {COLOR_REFEREE_DISPLAY}")
+        st.markdown(f"**Goalkeeper Display Color (Fixed):** {COLOR_GOALKEEPER_DISPLAY}")
+        st.markdown(f"**Referee Display Color (Fixed):** {COLOR_REFEREE_DISPLAY}")
         st.markdown("---")
 
 
@@ -287,8 +351,7 @@ def streamlit_app():
     if uploaded_file is not None:
         if st.button("Start Tracking & Automatic Team Assignment", key="start_analysis", type="primary"):
             try:
-                # Execute core logic
-                # لا تمرر أي ألوان للفرق، فقط للحارس والحكم (الثابتة)
+                # Execute core logic (No color inputs needed)
                 output_video_path = process_video(uploaded_file, model)
 
                 st.success("Tracking and Classification Complete! 🎉")
@@ -296,6 +359,13 @@ def streamlit_app():
 
                 # --- Output Section ---
                 st.subheader("3. Processed Video Output")
+                
+                # Display the determined colors (optional, for feedback)
+                st.markdown(f"""
+                    #### Detected Color Centers (BGR)
+                    - **Team A (Darker):** `{TEAM_A_CENTER}`
+                    - **Team B (Lighter):** `{TEAM_B_CENTER}`
+                """)
                 
                 # Video Display
                 with open(output_video_path, 'rb') as f:
