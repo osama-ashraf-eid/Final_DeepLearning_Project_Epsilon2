@@ -7,7 +7,7 @@ import tempfile
 import os
 import io
 from collections import defaultdict
-from sklearn.cluster import KMeans
+# تم حذف: from sklearn.cluster import KMeans - لتجنب خطأ ModuleNotFoundError
 
 # --- 1. CONFIGURATION AND UTILITIES ---
 
@@ -26,7 +26,7 @@ COLOR_GOALKEEPER_DISPLAY = (0, 255, 255) # Yellow
 AUTO_LEARNING_FRAMES = 50 # عدد الإطارات التي يتم تجميع الألوان منها
 BGR_TOLERANCE = 70 # زيادة التسامح قليلاً بسبب التعقيد اللوني بعد التجميع
 
-# --- UTILITY FOR COLOR ANALYSIS (K-Means Clustering) ---
+# --- UTILITY FOR COLOR ANALYSIS (K-Means Clustering - Pure NumPy) ---
 
 def get_average_color(frame, box):
     """
@@ -39,6 +39,38 @@ def get_average_color(frame, box):
         return np.array([0,0,0])
     # حساب متوسط اللون في منطقة القميص
     return np.mean(roi.reshape(-1,3), axis=0)
+
+# Function to perform simplified K-Means clustering using NumPy
+def simple_kmeans_numpy(data, k=2, max_iters=10):
+    """Simple K-Means clustering implementation using NumPy."""
+    
+    # Check if data size is sufficient
+    if data.shape[0] < k:
+        return None
+
+    # 1. Initialize k centroids randomly
+    indices = np.random.choice(data.shape[0], k, replace=False)
+    centroids = data[indices]
+
+    for _ in range(max_iters):
+        # 2. Assignment Step: Find the nearest centroid for each data point
+        # توسيع Centroids و Data لتتمكن NumPy من حساب المسافات لجميع النقاط دفعة واحدة
+        distances = np.sqrt(((data - centroids[:, np.newaxis])**2).sum(axis=2))
+        labels = np.argmin(distances, axis=0)
+
+        # 3. Update Step: Recalculate centroids
+        new_centroids = np.array([data[labels == i].mean(axis=0) 
+                                  if np.any(labels == i) else centroids[i] 
+                                  for i in range(k)])
+        
+        # Check for convergence (small change in centroids)
+        if np.allclose(centroids, new_centroids):
+            break
+        
+        centroids = new_centroids
+        
+    return centroids
+
 
 # قاموس لتخزين تعيين الفريق (Team A/Team B) لـ ID اللاعب بشكل ثابت
 team_assignment_map = {} 
@@ -81,19 +113,21 @@ def assign_team_by_reference(player_id, color):
 
 def determine_team_colors(kit_colors):
     """
-    يطبق خوارزمية K-Means لتحديد مركزي اللون (K=2) للفريقين.
+    يطبق خوارزمية K-Means (باستخدام NumPy) لتحديد مركزي اللون (K=2) للفريقين.
     """
     global TEAM_A_CENTER, TEAM_B_CENTER
     
-    if len(kit_colors) < 2:
-        return # لا يكفي للتجميع
+    if len(kit_colors) < 50: # Adjusting check to be safe
+        # st.error("Not enough color samples collected for clustering.") # لا يمكن استخدام Streamlit هنا
+        return 
     
     colors_np = np.array(kit_colors, dtype=np.float32)
     
-    # تطبيق K-Means لتقسيم الألوان إلى مجموعتين
-    kmeans = KMeans(n_clusters=2, random_state=0, n_init=10)
-    kmeans.fit(colors_np)
-    centers = kmeans.cluster_centers_
+    # تطبيق K-Means باستخدام NumPy بدلاً من scikit-learn
+    centers = simple_kmeans_numpy(colors_np, k=2)
+    
+    if centers is None or centers.shape[0] < 2:
+        return 
     
     # تحديد الفريق A و B بناءً على اللمعان (الفريق A هو الداكن)
     luminosity_A = np.mean(centers[0])
@@ -190,6 +224,7 @@ def process_video(uploaded_video_file, model):
         # 1. مرحلة التعلم التلقائي (أول 50 إطار)
         if frame_num <= AUTO_LEARNING_FRAMES:
             for box, cls, track_id in zip(boxes, classes, ids):
+                 # تجاهل الحكم (cls != 3)
                  if cls in [1, 2]: # لاعب أو حارس
                     avg_bgr_color = get_average_color(frame, box)
                     kit_colors_for_learning.append(avg_bgr_color)
@@ -323,7 +358,7 @@ def streamlit_app():
 
         st.markdown("---")
         st.markdown("""
-            **Team Assignment Logic (Fully Automatic):** The system analyzes the first 50 frames to automatically determine the two main kit colors using **K-Means Clustering**.
+            **Team Assignment Logic (Fully Automatic):** The system analyzes the first 50 frames to automatically determine the two main kit colors using **K-Means Clustering (NumPy based)**.
             - **Team A:** Assigned to the DARKER of the two detected colors.
             - **Team B:** Assigned to the LIGHTER of the two detected colors.
             
