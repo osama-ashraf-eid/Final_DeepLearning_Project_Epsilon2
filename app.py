@@ -14,7 +14,7 @@ from collections import defaultdict
 CLASS_NAMES = {0: 'ball', 1: 'goalkeeper', 2: 'player', 3: 'referee'}
 
 # Use the user's custom trained model path.
-MODEL_PATH = "yolov8m-football_ball_only.pt" 
+MODEL_PATH = "yolov8m-football_ball_only.pt" 
 
 # --- UTILITY FOR COLOR ANALYSIS ---
 
@@ -31,7 +31,6 @@ def get_average_color(frame, box):
     return np.mean(roi.reshape(-1,3), axis=0)
 
 # قاموس لتخزين الألوان المرجعية للفرق التي تم تعيينها
-# سنستخدم هذا القاموس عالمياً داخل دالة process_video
 team_colors_map = {} 
 
 def assign_team_by_clustering(player_id, color, team_a_bgr, team_b_bgr, BGR_TOLERANCE=55):
@@ -76,8 +75,6 @@ def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper
     global team_colors_map
     team_colors_map = {} 
     
-    # لا حاجة لعدادات الاستحواذ أو التمريرات
-
     # Save the uploaded video to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tfile:
         tfile.write(uploaded_video_file.read())
@@ -188,15 +185,12 @@ def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper
                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             # -------------------------------------------------------------------
             
-            # لا يوجد منطق للاستحواذ هنا
-
         out.write(frame)
 
     cap.release()
     out.release()
     os.unlink(video_path)
 
-    # نكتفي بإرجاع مسار الفيديو المعالج فقط
     return output_video_path
 
 
@@ -249,6 +243,7 @@ def streamlit_app():
     # دالة مساعدة لتحويل مدخلات BGR
     def parse_bgr(bgr_str, default_bgr):
         try:
+            # تم إزالة U+00A0 من هنا
             parts = [int(p.strip()) for p in bgr_str.split(',') if p.strip().isdigit()]
             # يجب أن تكون الأجزاء 3 (B, G, R) وقيمها بين 0 و 255
             if len(parts) == 3 and all(0 <= p <= 255 for p in parts):
