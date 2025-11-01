@@ -27,11 +27,11 @@ DISPLAY_COLOR_B = (255, 0, 0) # Blue for Team B (Lighter)
 # ---------------------------------------
 
 # Constants for Auto-Learning
-FAST_LEARNING_FRAMES = 5  # التعلم الأولي السريع
-AUTO_LEARNING_FRAMES = 100 # التعلم النهائي لجمع عينات أكثر
-BGR_TOLERANCE = 100 # *تعديل*: زيادة التسامح لتحسين الفصل اللوني
+FAST_LEARNING_FRAMES = 5  
+AUTO_LEARNING_FRAMES = 100 
+BGR_TOLERANCE = 100 
 # CONSTANTS FOR BALL PROXIMITY
-BALL_PROXIMITY_FACTOR = 3.0 # *تعديل*: اعتبار اللاعب يمتلك الكرة إذا كانت المسافة أقل من 3.0 مرات من عرض صندوق الكرة.
+BALL_PROXIMITY_THRESHOLD = 180 # *تعديل كبير*: العودة إلى عتبة ثابتة كبيرة لمراعاة المنظور عند القدم
 
 # --- UTILITY FOR COLOR ANALYSIS (K-Means Clustering - Pure NumPy) ---
 
@@ -84,28 +84,24 @@ def assign_team_by_reference(player_id, color):
     """
     global team_assignment_map, TEAM_A_CENTER, TEAM_B_CENTER
     
-    # 1. إذا كان اللاعب مُعيّناً بالفعل، أعد التعيين المحفوظ
     if player_id in team_assignment_map:
         return team_assignment_map[player_id]
 
     if TEAM_A_CENTER is None or TEAM_B_CENTER is None:
-        return "Unassigned" # لا يمكن التصنيف قبل تحديد المراكز
+        return "Unassigned" 
 
     color_np = np.array(color)
     
-    # حساب المسافة الإقليدية (مسافة الألوان)
     dist_a = np.linalg.norm(color_np - TEAM_A_CENTER)
     dist_b = np.linalg.norm(color_np - TEAM_B_CENTER)
     
     assigned_team_name = "Unassigned"
     
-    # التصنيف بناءً على أقرب مركز لون مرجعي
     if dist_a < dist_b and dist_a < BGR_TOLERANCE:
         assigned_team_name = "Team A"
     elif dist_b < dist_a and dist_b < BGR_TOLERANCE: 
         assigned_team_name = "Team B"
 
-    # حفظ التعيين إذا نجح
     if assigned_team_name != "Unassigned":
         team_assignment_map[player_id] = assigned_team_name
         
@@ -131,7 +127,6 @@ def determine_team_colors(kit_colors, is_final=False):
     if centers is None or centers.shape[0] < 2:
         return 
     
-    # تحديد الفريق A و B بناءً على اللمعان (الفريق A هو الداكن)
     luminosity_A = np.mean(centers[0])
     luminosity_B = np.mean(centers[1])
     
@@ -140,7 +135,6 @@ def determine_team_colors(kit_colors, is_final=False):
     else:
         center_a, center_b = centers[1], centers[0]
 
-    # حفظ المراكز
     TEAM_A_CENTER = center_a.astype(int).tolist()
     TEAM_B_CENTER = center_b.astype(int).tolist()
 
@@ -160,7 +154,6 @@ def load_model():
 
 def process_video(uploaded_video_file, model):
     
-    # إعادة تعيين المتغيرات العالمية
     global team_assignment_map, TEAM_A_CENTER, TEAM_B_CENTER
     team_assignment_map = {} 
     TEAM_A_CENTER = None
@@ -168,7 +161,6 @@ def process_video(uploaded_video_file, model):
     
     kit_colors_for_learning = [] 
 
-    # Save the uploaded video to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tfile:
         tfile.write(uploaded_video_file.read())
         video_path = tfile.name
@@ -183,11 +175,11 @@ def process_video(uploaded_video_file, model):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (w, h))
 
-    # إعدادات التتبع - *تعديل IOU لزيادة استقرار الـ ID*
+    # إعدادات التتبع - IOU مرتفع لزيادة استقرار الـ ID
     results_iterator = model.track(
         source=video_path,
         conf=0.40,  
-        iou=0.8,     # *تم التعديل*: رفع IOU
+        iou=0.8,     
         persist=True,
         tracker="botsort.yaml", 
         stream=True, 
@@ -203,7 +195,6 @@ def process_video(uploaded_video_file, model):
         frame_num += 1
         frame = frame_data.orig_img.copy()
 
-        # Update progress bar
         if total_frames > 0:
             progress_bar.progress(min(frame_num / total_frames, 1.0))
 
@@ -218,7 +209,6 @@ def process_video(uploaded_video_file, model):
             except Exception:
                 pass
         
-        # متغيرات التخزين المؤقتة
         current_players = [] 
         current_ball = None 
         
@@ -231,22 +221,22 @@ def process_video(uploaded_video_file, model):
                 center_y = (y1 + y2) / 2
                 
                 if cls == 0: # الكرة
-                    ball_width = x2 - x1
-                    current_ball = (center_x, center_y, box, ball_width)
+                    current_ball = (center_x, center_y, box)
                 elif cls in [1, 2, 3]: # لاعب، حارس، حكم
                     
-                    player_center_pos = (center_x, center_y) # *تعديل*: استخدام مركز اللاعب
+                    player_foot_x = center_x
+                    player_foot_y = y2  # *تعديل*: العودة لاستخدام نقطة القدم
                     
                     current_players.append({
                         'id': track_id_int,
                         'cls': cls,
                         'box': box,
-                        'center_pos': player_center_pos,
+                        'foot_pos': (player_foot_x, player_foot_y), # نقطة القدم
                         'kit_center': get_average_color(frame, box)
                     })
 
 
-        # 1. مرحلة التعلم التلقائي السريع والنهائي (بدون تغيير)
+        # 1. مرحلة التعلم التلقائي (بدون تغيير)
         for player in current_players:
             if player['cls'] in [1, 2] and frame_num <= AUTO_LEARNING_FRAMES: 
                 kit_colors_for_learning.append(player['kit_center'])
@@ -266,29 +256,25 @@ def process_video(uploaded_video_file, model):
              TEAM_B_CENTER = [255, 0, 0] 
         
         
-        # 2. تحديد اللاعب الذي يمتلك الكرة - *منطق محسّن*
+        # 2. تحديد اللاعب الذي يمتلك الكرة - *منطق محسّن ثباتياً*
         player_with_ball_id = None
         if TEAM_A_CENTER is not None and current_ball is not None:
             ball_pos = np.array(current_ball[0:2])
-            ball_width = current_ball[3]
             min_dist = float('inf')
-
-            # تحديد المسافة القصوى المقبولة بناءً على حجم الكرة
-            max_allowed_distance = ball_width * BALL_PROXIMITY_FACTOR
 
             # البحث عن أقرب لاعب للكرة
             for player in current_players:
                 if player['cls'] in [1, 2]: # فقط اللاعبين والحراس
-                    player_center_pos = np.array(player['center_pos'])
-                    # *تعديل*: حساب المسافة بين مركز الكرة ومركز اللاعب
-                    distance = np.linalg.norm(player_center_pos - ball_pos)
+                    player_foot_pos = np.array(player['foot_pos'])
+                    # *تعديل*: حساب المسافة بين مركز الكرة ونقطة القدم
+                    distance = np.linalg.norm(player_foot_pos - ball_pos)
                     
                     if distance < min_dist:
                         min_dist = distance
                         player_with_ball_id = player['id']
 
-            # تحديد اللاعب الذي يمتلك الكرة (بناءً على المسافة النسبية)
-            if min_dist > max_allowed_distance:
+            # تحديد اللاعب الذي يمتلك الكرة (بناءً على العتبة الثابتة الجديدة)
+            if min_dist > BALL_PROXIMITY_THRESHOLD:
                 player_with_ball_id = None 
 
 
@@ -330,10 +316,9 @@ def process_video(uploaded_video_file, model):
                     color = COLOR_GOALKEEPER_DISPLAY 
                     team_label = f"GK ({team_label.split(' ')[1]})"
                     
-                # *التعديل المطلوب*: إضافة نص "has a ball"
+                # إضافة نص "has a ball"
                 if track_id_int == player_with_ball_id:
                     ball_text = "(has a ball)"
-                    # رسم النص فوق صندوق التحديد مباشرة
                     cv2.putText(frame, ball_text, (x1, y1 - 35),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                     
@@ -397,7 +382,7 @@ def streamlit_app():
     """, unsafe_allow_html=True)
 
     # Title
-    st.markdown('<div class="main-title">⚽ Football Detection & Tracking (Final Optimization) </div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">⚽ Football Detection & Tracking (Proximity Fix) </div>', unsafe_allow_html=True)
     st.markdown("---")
     
     # Layout for inputs and preview
@@ -409,10 +394,9 @@ def streamlit_app():
 
         st.markdown("---")
         st.markdown(f"""
-            #### ✅ Optimization Updates:
-            * **Tracking Stability:** IOU increased to 0.8 and Color Tolerance increased to 100 to improve ID stability.
-            * **Ball Possession Logic:** Now uses **relative distance** (center-to-center) to dynamically account for perspective. Possession is confirmed if the distance is less than **{BALL_PROXIMITY_FACTOR} times the width of the ball**.
-            * **Initial Classification:** Starts after **{FAST_LEARNING_FRAMES} frames** (less than 0.5s).
+            #### 🛠️ New Proximity Logic:
+            * **Ball Possession:** Now uses **Foot Position** and a large **fixed pixel threshold ({BALL_PROXIMITY_THRESHOLD}px)** to ensure detection across different perspectives.
+            * **Tracking Stability:** IOU remains at 0.8 and Color Tolerance at 100 for better ID consistency.
         """)
         
         st.markdown(f"""
