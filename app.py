@@ -10,7 +10,6 @@ import io
 # --- 1. CONFIGURATION AND UTILITIES ---
 
 # Define the class names based on the user's custom model training
-# We use the user's provided class map: {0: 'ball', 1: 'goalkeeper', 2: 'player', 3: 'referee'}
 CLASS_NAMES = {0: 'ball', 1: 'goalkeeper', 2: 'player', 3: 'referee'}
 
 # Use the user's custom trained model path.
@@ -50,15 +49,17 @@ def process_video(uploaded_video_file, model, team_a_ids):
 
     possession_log = []
 
+    # --- التعديلات الرئيسية هنا لتحسين حفظ الهوية (ID Preservation) ---
     results = model.track(
         source=video_path,
-        conf=0.4,
-        iou=0.5,
+        conf=0.35,  # تخفيض الثقة قليلاً للمساعدة في الاكتشافات المشوشة
+        iou=0.6,   # زيادة الـ IoU قليلاً لطلب تداخل أعلى بين الصناديق
         persist=True,
-        tracker="bytetrack.yaml",
+        tracker="botsort.yaml", # استخدام BoT-SORT غالباً ما يعطي نتائج أفضل في حفظ الهوية
         stream=True,
         verbose=False
     )
+    # -------------------------------------------------------------------
 
     frame_num = 0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -94,10 +95,10 @@ def process_video(uploaded_video_file, model, team_a_ids):
             # Determine Team Color and Label
             if cls in [1, 2]: # Player or Goalkeeper
                 if track_id_int in team_a_ids:
-                    color = (255, 100, 0) # Team A: Blue
+                    color = (255, 100, 0) # Team A: Blue (لون فريق A)
                     team_label = "Team A"
                 else:
-                    color = (0, 0, 255) # Team B: Red
+                    color = (0, 0, 255) # Team B: Red (لون فريق B)
                     team_label = "Team B"
 
                 players.append((track_id_int, (x1, y1, x2, y2)))
@@ -112,7 +113,7 @@ def process_video(uploaded_video_file, model, team_a_ids):
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
                 cv2.putText(frame, "Ball", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-        # --- Possession Calculation ---
+            # --- باقي الكود كما هو: حساب الاستحواذ ---
         ball_owner_id = None
         min_dist = None
         possession_detected = False
@@ -153,7 +154,7 @@ def process_video(uploaded_video_file, model, team_a_ids):
         # Log Data
         owner_team = None
         if ball_owner_id is not None and possession_detected:
-             owner_team = "Team A" if ball_owner_id in team_a_ids else "Team B"
+              owner_team = "Team A" if ball_owner_id in team_a_ids else "Team B"
 
         possession_log.append({
             "frame": frame_num,
