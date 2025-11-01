@@ -22,6 +22,11 @@ COLOR_BALL = (0, 255, 255) # Yellow/Cyan
 COLOR_REFEREE_DISPLAY = (0, 165, 255) # Orange/Amber
 COLOR_GOALKEEPER_DISPLAY = (0, 255, 255) # Yellow
 
+# --- NEW DISPLAY COLORS FOR CLARITY ---
+DISPLAY_COLOR_A = (0, 0, 255) # Red for Team A (Darker)
+DISPLAY_COLOR_B = (255, 0, 0) # Blue for Team B (Lighter)
+# ---------------------------------------
+
 # Constants for Auto-Learning
 AUTO_LEARNING_FRAMES = 50 # عدد الإطارات التي يتم تجميع الألوان منها
 BGR_TOLERANCE = 70 # زيادة التسامح قليلاً بسبب التعقيد اللوني بعد التجميع
@@ -273,11 +278,11 @@ def process_video(uploaded_video_file, model):
                 
                 team_label = assigned_team_name
 
-                # 3. تحديد لون العرض بناءً على التعيين (لون المركز المستخلص)
+                # 3. تحديد لون العرض بناءً على التعيين (استخدام الألوان الواضحة)
                 if team_label == "Team A":
-                    color = TEAM_A_CENTER
+                    color = DISPLAY_COLOR_A # استخدام الأحمر للعرض
                 elif team_label == "Team B":
-                    color = TEAM_B_CENTER
+                    color = DISPLAY_COLOR_B # استخدام الأزرق للعرض
                 else:
                     color = (255, 255, 255) # Unassigned players are white
 
@@ -357,10 +362,10 @@ def streamlit_app():
         uploaded_file = st.file_uploader("Upload an MP4 Video of a Football Match", type=["mp4"])
 
         st.markdown("---")
-        st.markdown("""
-            **Team Assignment Logic (Fully Automatic):** The system analyzes the first 50 frames to automatically determine the two main kit colors using **K-Means Clustering (NumPy based)**.
-            - **Team A:** Assigned to the DARKER of the two detected colors.
-            - **Team B:** Assigned to the LIGHTER of the two detected colors.
+        st.markdown(f"""
+            **Team Assignment Logic (Fully Automatic):** The system analyzes the first 50 frames to automatically determine the two main kit colors.
+            - **Team A (Darker):** Assigned Red for display ({DISPLAY_COLOR_A} BGR).
+            - **Team B (Lighter):** Assigned Blue for display ({DISPLAY_COLOR_B} BGR).
             
             *No manual color input is required.*
         """)
@@ -397,9 +402,9 @@ def streamlit_app():
                 
                 # Display the determined colors (optional, for feedback)
                 st.markdown(f"""
-                    #### Detected Color Centers (BGR)
-                    - **Team A (Darker):** `{TEAM_A_CENTER}`
-                    - **Team B (Lighter):** `{TEAM_B_CENTER}`
+                    #### Detected Color Centers (BGR - Used for Classification Logic)
+                    - **Team A (Darker Kit Center):** `{TEAM_A_CENTER}`
+                    - **Team B (Lighter Kit Center):** `{TEAM_B_CENTER}`
                 """)
                 
                 # Video Display
