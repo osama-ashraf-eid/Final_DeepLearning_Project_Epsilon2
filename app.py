@@ -28,24 +28,37 @@ DISPLAY_COLOR_B = (255, 0, 0) # Blue for Team B
 
 # Auto-Learning constants
 AUTO_LEARNING_FRAMES = 150 # Increase learning samples to 150 frames
-# Increase tolerance for better color separation, or use relative distance logic
-# Use a higher value here to reduce unnecessary "Unassigned" cases
+# Color tolerance for assignment distance check.
 COLOR_TOLERANCE = 120 
 
 # --- UTILITY FOR COLOR ANALYSIS (K-Means Clustering - Pure NumPy) ---
 
 def get_average_color(frame, box):
     """
-    Extracts the average BGR color of pixels in the upper third of the bounding box (jersey).
+    Extracts the median BGR color of pixels in the central torso area (1/4 to 1/2 height) 
+    of the bounding box for robustness against noise.
     """
     x1, y1, x2, y2 = map(int, box)
-    # Focus on the upper third as the jersey area to minimize grass influence
-    roi = frame[y1: int(y1 + (y2 - y1) / 3), x1:x2]
+    
+    # Calculate box height
+    h_box = y2 - y1
+    
+    # Define ROI: Middle section (from 1/4 to 1/2 of the box height)
+    y_start = int(y1 + h_box / 4)
+    y_end = int(y1 + h_box / 2)
+    
+    # Clamp y_start/y_end to avoid zero or negative heights
+    y_start = max(y1, y_start)
+    y_end = min(y2, y_end)
+    
+    roi = frame[y_start:y_end, x1:x2]
+    
     if roi.size == 0:
         # Returns an expected zero NumPy array (float32)
         return np.array([0., 0., 0.], dtype=np.float32)
-    # Calculate the average color in the jersey area and return it as float32
-    return np.mean(roi.reshape(-1,3), axis=0).astype(np.float32)
+        
+    # Calculate the MEDIAN color in the region for robustness, and return it as float32
+    return np.median(roi.reshape(-1,3), axis=0).astype(np.float32)
 
 # Function to perform simplified K-Means clustering using NumPy
 def simple_kmeans_numpy(data, k=2, max_iters=10):
@@ -142,13 +155,13 @@ def determine_team_colors(kit_colors):
         return 
     
     # Determine Team A and B based on luminosity (Team A is the darker/less luminous)
-    # Luminosity is calculated here as the average of BGR values (considering BGR values are positive)
+    # Luminosity is calculated here as the average of BGR values
     luminosity_A_center = np.mean(centers[0])
     luminosity_B_center = np.mean(centers[1])
     
     # Team A is the one with the lowest luminosity (darker)
     if luminosity_A_center < luminosity_B_center:
-        # Correction: Centers are stored as np.ndarray (float32) not int lists
+        # Centers are stored as np.ndarray (float32)
         TEAM_A_CENTER = centers[0]
         TEAM_B_CENTER = centers[1]
     else:
@@ -222,7 +235,7 @@ def process_video(uploaded_video_file, model):
         # Update progress bar
         if total_frames > 0:
             progress_bar.progress(min(frame_num / total_frames, 1.0), 
-                                  text="Processing frames...")
+                                  text=f"Processing frame {frame_num} of {total_frames}...")
 
         # --- Attempt to extract boxes and ID ---
         boxes = None
