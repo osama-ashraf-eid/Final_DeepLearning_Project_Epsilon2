@@ -150,7 +150,7 @@ results = model.track(
 ### 🧑‍💻 Author
 **Osama Ashraf Eid**  
 🎓 Faculty of Computers and Information, Fayoum University – AI Department  
-📧 [osamaashrafeid@example.com](mailto:osamaashrafeid@example.com)  
+📧 [osamaashrafeid@example.com](mailto:osama.os.gh.2004.2003@gmail.com)  
 📍 Egypt
 
 ---
