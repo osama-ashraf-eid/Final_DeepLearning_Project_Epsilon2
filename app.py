@@ -398,7 +398,7 @@ def streamlit_app():
     """, unsafe_allow_html=True)
 
     # Title
-    st.markdown('<div class="main-title">⚽ Football Detection & Tracking (Optimized) </div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">⚽ Football Detection & Tracking  </div>', unsafe_allow_html=True)
     st.markdown("---")
     
     # Layout for inputs and preview
