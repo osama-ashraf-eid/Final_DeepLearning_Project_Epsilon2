@@ -13,8 +13,48 @@ import io
 CLASS_NAMES = {0: 'ball', 1: 'goalkeeper', 2: 'player', 3: 'referee'}
 
 # Use the user's custom trained model path.
-MODEL_PATH = "yolov8m-football_ball_only.pt"
+# ملاحظة: يجب أن يكون هذا الملف موجودًا في نفس مسار تشغيل التطبيق.
+MODEL_PATH = "yolov8m-football_ball_only.pt" 
 
+# --- UTILITY FOR COLOR ANALYSIS ---
+
+def get_kit_color_bgr(frame, box):
+    """
+    يستخلص متوسط لون الجزء العلوي من صندوق التحديد (القميص).
+    """
+    x1, y1, x2, y2 = map(int, box)
+    
+    # خذ الثلث الأوسط من الجزء العلوي (منطقة القميص)
+    # نأخذ الثلث الأوسط من الجزء العلوي لتقليل تأثير الخلفية (العشب)
+    kit_area = frame[y1 : int(y1 + (y2 - y1) / 3), x1 : x2] 
+    
+    if kit_area.size == 0:
+        return (0, 0, 0) # أسود في حالة الفشل
+    
+    # حساب متوسط لون BGR في المنطقة المحددة
+    avg_color_bgr = np.mean(kit_area, axis=(0, 1)).astype(int).tolist()
+    return tuple(avg_color_bgr)
+
+def classify_team_by_color(bgr_color, team_a_bgr, team_b_bgr, BGR_TOLERANCE=55): # تم زيادة التسامح قليلاً للإضاءة
+    """
+    يصنف اللون بناءً على أقرب مسافة إقليدية في مساحة BGR إلى ألوان الفريقين A و B.
+    """
+    color_np = np.array(bgr_color)
+    team_a_np = np.array(team_a_bgr)
+    team_b_np = np.array(team_b_bgr)
+    
+    # حساب المسافة الإقليدية (مسافة الألوان)
+    dist_a = np.linalg.norm(color_np - team_a_np)
+    dist_b = np.linalg.norm(color_np - team_b_np)
+    
+    # التصنيف
+    if dist_a < dist_b and dist_a < BGR_TOLERANCE:
+        return "Team A"
+    elif dist_b < dist_a and dist_b < BGR_TOLERANCE:
+        return "Team B"
+    else:
+        return None # لم يتم التصنيف بثقة
+    
 # --- 2. CORE PROCESSING LOGIC ---
 
 @st.cache_resource
@@ -22,14 +62,13 @@ def load_model():
     """Loads the YOLO model only once and caches it."""
     try:
         st.info(f"Attempting to load YOLO model: {MODEL_PATH}")
-        # The ultralytics library handles downloading common models if not found locally
         model = YOLO(MODEL_PATH)
         return model
     except Exception as e:
         st.error(f"Error loading YOLO model. Check MODEL_PATH or network connection. Error: {e}")
         st.stop()
 
-def process_video(uploaded_video_file, model, team_a_ids):
+def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper_bgr, referee_bgr):
     # Save the uploaded video to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tfile:
         tfile.write(uploaded_video_file.read())
@@ -48,14 +87,15 @@ def process_video(uploaded_video_file, model, team_a_ids):
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (w, h))
 
     possession_log = []
+    player_team_map = {} # قاموس لحفظ الـ ID والفريق المقابل له بشكل دائم بناءً على تحليل اللون
 
-    # --- التعديلات الرئيسية هنا لتحسين حفظ الهوية (ID Preservation) ---
+    # --- إعدادات التتبع ---
     results = model.track(
         source=video_path,
-        conf=0.35,  # تخفيض الثقة قليلاً للمساعدة في الاكتشافات المشوشة
-        iou=0.6,   # زيادة الـ IoU قليلاً لطلب تداخل أعلى بين الصناديق
+        conf=0.35, 
+        iou=0.6,
         persist=True,
-        tracker="botsort.yaml", # استخدام BoT-SORT غالباً ما يعطي نتائج أفضل في حفظ الهوية
+        tracker="botsort.yaml", # استخدام BoT-SORT لحفظ هوية أفضل
         stream=True,
         verbose=False
     )
@@ -82,51 +122,85 @@ def process_video(uploaded_video_file, model, team_a_ids):
             classes = frame_data.boxes.cls.cpu().numpy().astype(int)
             ids = frame_data.boxes.id.cpu().numpy().astype(int)
         except Exception:
-            # Handle cases where boxes.id might not be available or tracking fails
             out.write(frame)
             continue
 
-        balls, players = [], []
+        balls, players_for_possession = [], [] # قائمة players_for_possession تشمل اللاعبين والحراس المصنفين فقط
 
         for box, cls, track_id in zip(boxes, classes, ids):
             x1, y1, x2, y2 = map(int, box)
             track_id_int = int(track_id)
 
-            # Determine Team Color and Label
-            if cls in [1, 2]: # Player or Goalkeeper
-                if track_id_int in team_a_ids:
-                    color = (255, 100, 0) # Team A: Blue (لون فريق A)
-                    team_label = "Team A"
+            color = (255, 255, 255) # لون افتراضي أبيض
+            team_label = "Unassigned"
+
+            # --------------------- A. الحكم (class 3) ---------------------
+            if cls == 3: 
+                team_label = "Referee"
+                color = referee_bgr
+            
+            # ---------------- B. اللاعبون وحراس المرمى (class 1, 2) ----------------
+            elif cls in [1, 2]:
+                
+                is_goalkeeper = (cls == 1) # بناءً على تعريف CLASS_NAMES
+                
+                # 1. محاولة الحصول على الفريق من القاموس المحفوظ (للحفاظ على الهوية)
+                if track_id_int in player_team_map:
+                    team_label = player_team_map[track_id_int]
+                    if team_label == "Team A":
+                        color = team_a_bgr
+                    else:
+                        color = team_b_bgr
+                
+                # 2. إذا لم يتم التعيين بعد، قم بتحليل اللون والتعيين
                 else:
-                    color = (0, 0, 255) # Team B: Red (لون فريق B)
-                    team_label = "Team B"
-
-                players.append((track_id_int, (x1, y1, x2, y2)))
-                # Draw the team bounding box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                # Draw the team ID
-                cv2.putText(frame, f"{team_label} ID {track_id_int}", (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-            elif cls == 0: # Ball
+                    kit_bgr = get_kit_color_bgr(frame, box)
+                    assigned_team = classify_team_by_color(kit_bgr, team_a_bgr, team_b_bgr)
+                    
+                    if assigned_team:
+                        team_label = assigned_team
+                        player_team_map[track_id_int] = assigned_team # حفظ التعيين
+                        if team_label == "Team A":
+                            color = team_a_bgr
+                        else:
+                            color = team_b_bgr
+                
+                # 3. تلوين الحارس بلونه الخاص (إذا تم تصنيفه لفريق)
+                if is_goalkeeper and (team_label.startswith("Team A") or team_label.startswith("Team B")):
+                    color = goalkeeper_bgr 
+                    team_label = f"GK ({team_label})"
+                
+                # إضافة اللاعب/الحارس المصنف لقائمة تحليل الاستحواذ
+                if team_label.startswith("Team"):
+                    players_for_possession.append((track_id_int, (x1, y1, x2, y2), team_label))
+                    
+            # --------------------- C. الكرة (class 0) ---------------------
+            elif cls == 0:
                 balls.append((track_id_int, (x1, y1, x2, y2)))
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
                 cv2.putText(frame, "Ball", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                
+            # رسم صندوق التحديد والـ ID للجميع (اللاعبين، الحراس، الحكام)
+            if cls != 0:
+                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                 cv2.putText(frame, f"{team_label} ID {track_id_int}", (x1, y1 - 10),
+                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            # -------------------------------------------------------------------
 
-            # --- باقي الكود كما هو: حساب الاستحواذ ---
+            # --- حساب الاستحواذ ---
         ball_owner_id = None
         min_dist = None
         possession_detected = False
-        POSSESSION_THRESHOLD = 80 # Heuristic value from original code
+        POSSESSION_THRESHOLD = 80
 
-        if len(balls) > 0 and len(players) > 0:
+        if len(balls) > 0 and len(players_for_possession) > 0:
             # Get ball center (assuming one ball)
             ball_box = balls[0][1]
             bx1, by1, bx2, by2 = ball_box
             ball_center = np.array([(bx1 + bx2) / 2, (by1 + by2) / 2])
 
             min_dist = 1e9
-            for player_id, player_box in players:
+            for player_id, player_box, team_label in players_for_possession:
                 # Get player center
                 px1, py1, px2, py2 = player_box
                 player_center = np.array([(px1 + px2) / 2, (py1 + py2) / 2])
@@ -137,11 +211,11 @@ def process_video(uploaded_video_file, model, team_a_ids):
                 if dist < min_dist:
                     min_dist = dist
                     ball_owner_id = player_id
-
+            
             # Detect and highlight possession
-            if min_dist < POSSESSION_THRESHOLD:
+            if min_dist < POSSESSION_THRESHOLD and ball_owner_id in player_team_map:
                 possession_detected = True
-                for player_id, player_box in players:
+                for player_id, player_box, team_label in players_for_possession:
                     if player_id == ball_owner_id:
                         px1, py1, px2, py2 = player_box
                         # Highlight the possessing player in GREEN (Override Team Color)
@@ -154,7 +228,10 @@ def process_video(uploaded_video_file, model, team_a_ids):
         # Log Data
         owner_team = None
         if ball_owner_id is not None and possession_detected:
-              owner_team = "Team A" if ball_owner_id in team_a_ids else "Team B"
+            # استخدام القاموس للحصول على اسم الفريق
+            owner_team_full = player_team_map.get(ball_owner_id) 
+            # تنظيف الاسم في الـ log ليكون "Team A" أو "Team B" فقط
+            owner_team = "Team A" if "Team A" in owner_team_full else ("Team B" if "Team B" in owner_team_full else None)
 
         possession_log.append({
             "frame": frame_num,
@@ -181,7 +258,7 @@ def streamlit_app():
     # Load the model early and cache it
     model = load_model()
 
-    # 1. Page Config and Background (Using Unsplash image of a pitch)
+    # 1. Page Config and Background
     st.set_page_config(layout="wide")
 
     st.markdown("""
@@ -204,7 +281,7 @@ def streamlit_app():
         }
         /* Style containers for better readability on the background */
         .block-container {
-            background-color: rgba(0, 0, 0, 0.6);
+            background-color: rgba(0, 0, 0, 0.7);
             border-radius: 10px;
             padding: 20px !important;
         }
@@ -216,36 +293,63 @@ def streamlit_app():
     """, unsafe_allow_html=True)
 
     # Title
-    st.markdown('<div class="main-title">Football Detection & Tracking</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">⚽ Football Detection & Tracking (Color-Based Team Split)</div>', unsafe_allow_html=True)
     st.markdown("---")
 
     # Layout for inputs and preview
     col1, col2 = st.columns([1, 1])
+    
+    # دالة مساعدة لتحويل مدخلات BGR
+    def parse_bgr(bgr_str, default_bgr):
+        try:
+            parts = [int(p.strip()) for p in bgr_str.split(',') if p.strip().isdigit()]
+            # يجب أن تكون الأجزاء 3 (B, G, R) وقيمها بين 0 و 255
+            if len(parts) == 3 and all(0 <= p <= 255 for p in parts):
+                return tuple(parts)
+            return default_bgr
+        except ValueError:
+            return default_bgr
 
     with col1:
-        st.subheader("1. Upload Video & Team Configuration")
+        st.subheader("1. Upload Video & Color Configuration 🎨")
         uploaded_file = st.file_uploader("Upload an MP4 Video of a Football Match", type=["mp4"])
 
-        # Team Assignment Input
         st.markdown("---")
-        st.markdown("**Team ID Assignment**")
-        team_a_ids_input = st.text_input(
-            "Enter Player IDs for Team A (comma-separated, e.g., 1, 3, 5)",
-            value="1, 2, 5, 8, 11",
-            help="These are the tracking IDs assigned dynamically by the tracker. All other tracked players will be Team B."
+        st.markdown("**Team Colors (BGR Format: Blue, Green, Red)**")
+        
+        # 1. Team A
+        team_a_bgr_str = st.text_input(
+            "Team A Color (Used for Auto-Classification)",
+            value="255, 100, 0", # Default Blue (BGR)
+        )
+        # 2. Team B
+        team_b_bgr_str = st.text_input(
+            "Team B Color (Used for Auto-Classification)",
+            value="0, 0, 255", # Default Red (BGR)
+        )
+        
+        st.markdown("---")
+        st.markdown("**Special Roles Display Colors (BGR)**")
+
+        # 3. Goalkeeper
+        goalkeeper_bgr_str = st.text_input(
+            "Goalkeeper Display Color (Override Team Color)",
+            value="0, 255, 0", # Default Green (BGR)
         )
 
-        # Convert input string to a set of integers
-        team_a_ids = set()
-        try:
-            if team_a_ids_input:
-                # Filter out non-digit strings and convert to int
-                team_a_ids = set(map(int, [id.strip() for id in team_a_ids_input.split(',') if id.strip().isdigit()]))
-        except ValueError:
-            st.error("Invalid input for Team A IDs. Please use comma-separated numbers.")
-            team_a_ids = set()
+        # 4. Referee
+        referee_bgr_str = st.text_input(
+            "Referee Display Color",
+            value="0, 255, 255", # Default Yellow (BGR)
+        )
 
-        st.markdown(f"Team A IDs configured: **{', '.join(map(str, sorted(list(team_a_ids))))}**")
+        # Apply parsing
+        team_a_bgr = parse_bgr(team_a_bgr_str, (255, 100, 0))
+        team_b_bgr = parse_bgr(team_b_bgr_str, (0, 0, 255))
+        goalkeeper_bgr = parse_bgr(goalkeeper_bgr_str, (0, 255, 0))
+        referee_bgr = parse_bgr(referee_bgr_str, (0, 255, 255))
+        
+        st.markdown(f"Configured Colors: **Team A: {team_a_bgr}**, **Team B: {team_b_bgr}**, **GK: {goalkeeper_bgr}**, **Referee: {referee_bgr}**")
         st.markdown("---")
 
 
@@ -262,22 +366,23 @@ def streamlit_app():
     st.markdown("---")
 
     # Processing Button
-    if uploaded_file is not None and len(team_a_ids) > 0:
+    if uploaded_file is not None:
         if st.button("Start Tracking & Possession Analysis", key="start_analysis", type="primary"):
             try:
                 # Execute core logic
                 output_video_path, output_csv_path, df_log = process_video(
-                    uploaded_file, model, team_a_ids
+                    uploaded_file, model, team_a_bgr, team_b_bgr, goalkeeper_bgr, referee_bgr
                 )
 
-                st.success("Analysis Complete!")
+                st.success("Analysis Complete! 🎉")
                 st.markdown("---")
 
                 # --- Output Section ---
-                st.subheader("3. Processed Video Output")
+                st.subheader("3. Processed Video Output & Data")
                 output_col1, output_col2 = st.columns([1, 1])
 
                 with output_col1:
+                    st.markdown("#### Annotated Video")
                     # Video Display
                     with open(output_video_path, 'rb') as f:
                         output_video_bytes = f.read()
@@ -293,7 +398,7 @@ def streamlit_app():
                     )
 
                 with output_col2:
-                    st.subheader("4. Ball Possession Log (CSV)")
+                    st.markdown("#### Possession Log (CSV)")
                     # Display DataFrame
                     st.dataframe(df_log, use_container_width=True)
 
@@ -308,13 +413,11 @@ def streamlit_app():
                     )
 
             except Exception as e:
-                st.error("An error occurred during video processing. See console for details.")
+                st.error("An error occurred during video processing.")
                 st.exception(e)
 
     elif uploaded_file is None:
         st.info("Upload a video file to enable the analysis.")
-    elif uploaded_file is not None and len(team_a_ids) == 0:
-        st.warning("Please ensure valid Player IDs are entered for Team A configuration.")
 
 if __name__ == '__main__':
     streamlit_app()
