@@ -382,7 +382,7 @@ def streamlit_app():
     """, unsafe_allow_html=True)
 
     # Title
-    st.markdown('<div class="main-title">⚽ Football Detection & Tracking (Proximity Fix) </div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">⚽ Football Detection & Tracking  </div>', unsafe_allow_html=True)
     st.markdown("---")
     
     # Layout for inputs and preview
@@ -392,21 +392,8 @@ def streamlit_app():
         st.subheader("1. Upload Video (Automatic Color Detection) 🎨")
         uploaded_file = st.file_uploader("Upload an MP4 Video of a Football Match", type=["mp4"])
 
-        st.markdown("---")
-        st.markdown(f"""
-            #### 🛠️ New Proximity Logic:
-            * **Ball Possession:** Now uses **Foot Position** and a large **fixed pixel threshold ({BALL_PROXIMITY_THRESHOLD}px)** to ensure detection across different perspectives.
-            * **Tracking Stability:** IOU remains at 0.8 and Color Tolerance at 100 for better ID consistency.
-        """)
-        
-        st.markdown(f"""
-            #### 🌈 Display Colors:
-            - Team A: **Red**
-            - Team B: **Blue**
-            - Goalkeeper: **Green**
-            - Referee: **Magenta**
-        """)
-        st.markdown("---")
+       
+     
 
 
     # Pre-Analysis Video Preview
