@@ -16,14 +16,19 @@ CLASS_NAMES = {0: 'ball', 1: 'goalkeeper', 2: 'player', 3: 'referee'}
 # Use the user's custom trained model path.
 MODEL_PATH = "yolov8m-football_ball_only.pt" 
 
-# --- UTILITY FOR COLOR ANALYSIS ---
+# Fixed Display Colors (Roles are visually distinct)
+COLOR_BALL = (0, 255, 255) # Yellow/Cyan
+COLOR_REFEREE_DISPLAY = (0, 165, 255) # Orange/Amber
+COLOR_GOALKEEPER_DISPLAY = (0, 255, 255) # Yellow
+
+# --- UTILITY FOR COLOR ANALYSIS (Auto Clustering Logic) ---
 
 def get_average_color(frame, box):
     """
-    يستخلص متوسط لون البيكسلات في صندوق التحديد كـ BGR.
+    يستخلص متوسط لون البيكسلات في الثلث العلوي من صندوق التحديد (القميص) كـ BGR.
     """
     x1, y1, x2, y2 = map(int, box)
-    # التركيز على الثلث العلوي كمنطقة القميص
+    # التركيز على الثلث العلوي كمنطقة القميص لتقليل تأثير العشب
     roi = frame[y1: int(y1 + (y2 - y1) / 3), x1:x2]
     if roi.size == 0:
         return np.array([0,0,0])
@@ -31,29 +36,45 @@ def get_average_color(frame, box):
     return np.mean(roi.reshape(-1,3), axis=0)
 
 # قاموس لتخزين الألوان المرجعية للفرق التي تم تعيينها
-team_colors_map = {} 
+# يتم تعريف هذا المتغير كـ global لإعادة تعيينه في بداية process_video
+team_color_references = {} 
 
-def assign_team_by_clustering(player_id, color, team_a_bgr, team_b_bgr, BGR_TOLERANCE=55):
+def assign_team_by_clustering(player_id, color):
     """
-    يقوم بتصنيف اللاعب للفريق A أو B بناءً على أقرب مسافة لونية إلى الألوان المرجعية.
+    يقوم بتعيين اللاعب إلى أقرب مجموعة لونية موجودة أو إنشاء مجموعة جديدة إذا كان اللون بعيداً.
+    يتبع منطق الكود المرجعي لتقليل عدد مجموعات الألوان (Cluster).
     """
-    
+    global team_color_references
     color_np = np.array(color)
-    team_a_np = np.array(team_a_bgr)
-    team_b_np = np.array(team_b_bgr)
     
-    # حساب المسافة الإقليدية (مسافة الألوان)
-    dist_a = np.linalg.norm(color_np - team_a_np)
-    dist_b = np.linalg.norm(color_np - team_b_np)
-    
-    # التصنيف
-    if dist_a < dist_b and dist_a < BGR_TOLERANCE:
-        return "Team A", team_a_bgr
-    elif dist_b < dist_a and dist_b < BGR_TOLERANCE:
-        return "Team B", team_b_bgr
-    else:
-        # لم يتمكن من التعيين بثقة
-        return "Unassigned", (255, 255, 255) # لون أبيض لغير المصنفين
+    # إذا لم يكن اللاعب مُعيّناً بالفعل
+    if player_id not in team_color_references:
+        
+        # 1. إذا كانت هذه أول عملية تعيين، قم بإنشاء المجموعة الأولى
+        if not team_color_references:
+            # نستخدم ID اللاعب كـ Key مبدئي للقيمة اللونية
+            team_color_references[player_id] = color_np 
+            return color_np 
+
+        # 2. حاول إيجاد أقرب مجموعة لونية موجودة
+        min_dist = 1e9
+        closest_player_id = None
+        
+        for p_id, ref_color in team_color_references.items():
+            dist = np.linalg.norm(color_np - ref_color)
+            if dist < min_dist:
+                min_dist = dist
+                closest_player_id = p_id
+        
+        # 3. التعيين بناءً على التسامح (40 هو حد التسامح كما في الكود المرجعي)
+        if min_dist < 40:
+            # اللون قريب جداً: قم بتعيين هذا اللاعب إلى نفس مجموعة اللاعب الأقرب
+            team_color_references[player_id] = team_color_references[closest_player_id]
+        else:
+            # اللون بعيد: قم بإنشاء مجموعة لونية جديدة
+            team_color_references[player_id] = color_np
+            
+    return team_color_references[player_id].tolist()
 
 
 # --- 2. CORE PROCESSING LOGIC ---
@@ -69,11 +90,11 @@ def load_model():
         st.error(f"Error loading YOLO model. Check MODEL_PATH or network connection. Error: {e}")
         st.stop()
 
-def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper_bgr, referee_bgr):
+def process_video(uploaded_video_file, model):
     
     # إعادة تعيين المتغيرات العالمية في كل عملية جديدة
-    global team_colors_map
-    team_colors_map = {} 
+    global team_color_references
+    team_color_references = {} 
     
     # Save the uploaded video to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tfile:
@@ -107,10 +128,6 @@ def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     progress_bar = st.progress(0, text="Processing Frames...")
     
-    # ألوان العرض الثابتة
-    color_ball = (0, 255, 255)
-    color_referee_display = referee_bgr 
-
     for frame_data in results:
         frame_num += 1
         frame = frame_data.orig_img.copy()
@@ -135,55 +152,52 @@ def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper
             x1, y1, x2, y2 = map(int, box)
             track_id_int = int(track_id)
 
-            color = (255, 255, 255) # لون افتراضي
+            color = (255, 255, 255) # لون افتراضي (أبيض)
             team_label = "Unassigned"
 
             # --------------------- A. الحكم (class 3) ---------------------
             if cls == 3: 
                 team_label = "Referee"
-                color = color_referee_display
+                color = COLOR_REFEREE_DISPLAY
             
             # ---------------- B. اللاعبون وحراس المرمى (class 1, 2) ----------------
             elif cls in [1, 2]:
                 
                 is_goalkeeper = (cls == 1) 
                 
-                # 1. تحديد لون القميص 
+                # 1. تحديد لون القميص
                 avg_bgr_color = get_average_color(frame, (x1, y1, x2, y2))
                 
-                # 2. تعيين الفريق وحفظه
-                assigned_team_name, assigned_team_color = assign_team_by_clustering(
-                    track_id_int, avg_bgr_color, team_a_bgr, team_b_bgr
-                )
+                # 2. التعيين التلقائي للفريق باستخدام منطق التجميع
+                # team_color_bgr هي قيمة BGR المرجعية للمجموعة التي ينتمي إليها
+                team_color_bgr = assign_team_by_clustering(track_id_int, avg_bgr_color)
                 
-                # حفظ التعيين في القاموس الدائم (للحفاظ على الهوية)
-                if assigned_team_name != "Unassigned":
-                    team_colors_map[track_id_int] = assigned_team_name
+                # 3. تعيين اسم الفريق ولون العرض بناءً على اللمعان (Luminosity)
+                # يتبع المنطق المرجعي (المجموعة الداكنة = Team A, المجموعة الفاتحة = Team B)
                 
-                # تحديث التسمية واللون بناءً على ما تم حفظه أو تعيينه الآن
-                if track_id_int in team_colors_map:
-                    team_label = team_colors_map[track_id_int]
-                    color = team_a_bgr if team_label == "Team A" else team_b_bgr
+                # حساب متوسط لمعان اللون (الخفيف/الداكن)
+                if np.mean(team_color_bgr) < 128:
+                    color = (0, 0, 255) # أحمر/داكن للعرض
+                    team_label = "Team A" 
                 else:
-                    team_label = assigned_team_name
-                    color = assigned_team_color
-                
-                # 3. تلوين الحارس بلونه الخاص
-                if is_goalkeeper and team_label.startswith("Team"):
-                    color = goalkeeper_bgr 
+                    color = (255, 0, 0) # أزرق/فاتح للعرض
+                    team_label = "Team B"
+
+                # 4. تلوين الحارس بلونه الخاص (ثابت)
+                if is_goalkeeper:
+                    color = COLOR_GOALKEEPER_DISPLAY 
                     team_label = f"GK ({team_label})"
                     
             # --------------------- C. الكرة (class 0) ---------------------
             elif cls == 0:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color_ball, 2)
-                cv2.putText(frame, "Ball", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_ball, 2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), COLOR_BALL, 2)
+                cv2.putText(frame, "Ball", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_BALL, 2)
                 
             # رسم صندوق التحديد والـ ID للجميع (اللاعبين، الحراس، الحكام)
             if cls != 0:
                  cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2) 
                  cv2.putText(frame, f"{team_label} ID {track_id_int}", (x1, y1 - 10),
                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-            # -------------------------------------------------------------------
             
         out.write(frame)
 
@@ -194,7 +208,7 @@ def process_video(uploaded_video_file, model, team_a_bgr, team_b_bgr, goalkeeper
     return output_video_path
 
 
-# --- 3. STREAMLIT APP UI ---
+# --- 3. STREAMLIT APP UI (Simplified) ---
 def streamlit_app():
     # Load the model early and cache it
     model = load_model()
@@ -234,64 +248,26 @@ def streamlit_app():
     """, unsafe_allow_html=True)
 
     # Title
-    st.markdown('<div class="main-title">⚽ Football Detection & Tracking (Color-Based Team Split)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">⚽ Football Tracking: Auto Team Assignment</div>', unsafe_allow_html=True)
     st.markdown("---")
 
     # Layout for inputs and preview
     col1, col2 = st.columns([1, 1])
     
-    # دالة مساعدة لتحويل مدخلات BGR
-    def parse_bgr(bgr_str, default_bgr):
-        try:
-            # تم إزالة U+00A0 من هنا
-            parts = [int(p.strip()) for p in bgr_str.split(',') if p.strip().isdigit()]
-            # يجب أن تكون الأجزاء 3 (B, G, R) وقيمها بين 0 و 255
-            if len(parts) == 3 and all(0 <= p <= 255 for p in parts):
-                return tuple(parts)
-            return default_bgr
-        except ValueError:
-            return default_bgr
-
     with col1:
-        st.subheader("1. Upload Video & Color Configuration 🎨")
+        st.subheader("1. Upload Video & Role Display Colors 🎨")
         uploaded_file = st.file_uploader("Upload an MP4 Video of a Football Match", type=["mp4"])
 
         st.markdown("---")
-        st.markdown("**Team Colors (BGR Format: Blue, Green, Red)**")
+        st.markdown("""
+            **Automatic Team Assignment Logic:** The system automatically clusters player kit colors into two groups.  
+            - **Team A (Darker Kit):** Displayed in RED.
+            - **Team B (Lighter Kit):** Displayed in BLUE.
+        """)
         
-        # 1. Team A (Default: White - 255, 255, 255)
-        team_a_bgr_str = st.text_input(
-            "Team A Color (Used for Auto-Classification - White Kit)",
-            value="255, 255, 255", 
-        )
-        # 2. Team B (Default: Red - 0, 0, 255)
-        team_b_bgr_str = st.text_input(
-            "Team B Color (Used for Auto-Classification - Red Kit)",
-            value="0, 0, 255", 
-        )
-        
-        st.markdown("---")
-        st.markdown("**Special Roles Display Colors (BGR)**")
-
-        # 3. Goalkeeper (Default: Yellow - 0, 255, 255)
-        goalkeeper_bgr_str = st.text_input(
-            "Goalkeeper Display Color (Override Team Color - Yellow)",
-            value="0, 255, 255", 
-        )
-
-        # 4. Referee (Default: Orange/Amber - 0, 165, 255)
-        referee_bgr_str = st.text_input(
-            "Referee Display Color (Orange)",
-            value="0, 165, 255", 
-        )
-
-        # Apply parsing
-        team_a_bgr = parse_bgr(team_a_bgr_str, (255, 255, 255))
-        team_b_bgr = parse_bgr(team_b_bgr_str, (0, 0, 255))
-        goalkeeper_bgr = parse_bgr(goalkeeper_bgr_str, (0, 255, 255))
-        referee_bgr = parse_bgr(referee_bgr_str, (0, 165, 255))
-        
-        st.markdown(f"Configured Colors: **Team A: {team_a_bgr}**, **Team B: {team_b_bgr}**, **GK: {goalkeeper_bgr}**, **Referee: {referee_bgr}**")
+        # لا توجد مدخلات لألوان الفريقين هنا، فقط عرض ثابت للألوان
+        st.markdown(f"**Goalkeeper Display Color (Yellow):** {COLOR_GOALKEEPER_DISPLAY}")
+        st.markdown(f"**Referee Display Color (Orange):** {COLOR_REFEREE_DISPLAY}")
         st.markdown("---")
 
 
@@ -309,12 +285,11 @@ def streamlit_app():
 
     # Processing Button
     if uploaded_file is not None:
-        if st.button("Start Tracking & Team Classification", key="start_analysis", type="primary"):
+        if st.button("Start Tracking & Automatic Team Assignment", key="start_analysis", type="primary"):
             try:
                 # Execute core logic
-                output_video_path = process_video(
-                    uploaded_file, model, team_a_bgr, team_b_bgr, goalkeeper_bgr, referee_bgr
-                )
+                # لا تمرر أي ألوان للفرق، فقط للحارس والحكم (الثابتة)
+                output_video_path = process_video(uploaded_file, model)
 
                 st.success("Tracking and Classification Complete! 🎉")
                 st.markdown("---")
